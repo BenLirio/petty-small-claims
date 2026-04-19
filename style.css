@@ -553,6 +553,222 @@ textarea::placeholder {
   border-radius: 0;
 }
 
+/* ---------- AI Suggest controls ---------- */
+
+.label-hint {
+  font-family: 'Special Elite', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  text-transform: none;
+  margin-left: 4px;
+}
+
+.chip-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.suggest-btn {
+  font-family: 'Special Elite', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--ink);
+  border: 1px dashed var(--ink);
+  padding: 6px 10px;
+  min-height: 32px;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.suggest-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.suggest-status {
+  font-family: 'Special Elite', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  min-height: 14px;
+  margin: 4px 0 0;
+}
+
+/* ---------- Paid stamp + actions ---------- */
+
+.paid-stamp {
+  position: absolute;
+  top: 60px;
+  right: 18px;
+  transform: rotate(-14deg);
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
+  animation: paid-slam 0.35s ease-out;
+}
+
+@keyframes paid-slam {
+  0%   { transform: rotate(-14deg) scale(1.8); opacity: 0; }
+  60%  { transform: rotate(-14deg) scale(0.92); opacity: 1; }
+  100% { transform: rotate(-14deg) scale(1); opacity: 1; }
+}
+
+.paid-stamp-inner {
+  font-family: 'Playfair Display', serif;
+  font-weight: 900;
+  font-size: 42px;
+  letter-spacing: 0.08em;
+  color: var(--stamp-red);
+  border: 4px double var(--stamp-red);
+  padding: 4px 16px 6px;
+  background: rgba(242, 236, 222, 0.35);
+  text-shadow: 0 0 1px rgba(177, 39, 27, 0.45);
+}
+
+.paid-stamp-sub {
+  font-family: 'Special Elite', monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--stamp-red);
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+.paid-actions {
+  margin-top: 14px;
+}
+
+.paid-strip {
+  font-family: 'Special Elite', monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  padding: 12px 14px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+}
+
+.paid-strip-ok {
+  border-color: var(--stamp-red);
+  background: rgba(177, 39, 27, 0.06);
+  color: var(--ink);
+}
+
+.paid-strip-bad {
+  border-style: dashed;
+  border-color: var(--ink);
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--ink-soft);
+}
+
+.paid-note {
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  padding: 10px 12px;
+  border-top: 1.5px dotted var(--ink-soft);
+  border-bottom: 1.5px dotted var(--ink-soft);
+  line-height: 1.5;
+}
+
+.paid-receiver {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.mark-paid-btn {
+  font-family: 'Playfair Display', serif;
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: 0.14em;
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  padding: 16px 18px;
+  min-height: 52px;
+  cursor: pointer;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--stamp-red);
+}
+
+.mark-paid-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--stamp-red);
+}
+
+.paid-hint {
+  font-family: 'Special Elite', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.receipt-box {
+  border: 1.5px dashed var(--ink);
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.receipt-box.hidden {
+  display: none;
+}
+
+.receipt-label {
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.receipt-url {
+  width: 100%;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  padding: 8px 8px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
+.receipt-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.receipt-copy,
+.receipt-share {
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  padding: 9px 12px;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.receipt-share {
+  background: var(--stamp-red);
+}
+
 /* ---------- Mobile tighten ---------- */
 
 @media (max-width: 420px) {

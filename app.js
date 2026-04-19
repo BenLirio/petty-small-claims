@@ -13,7 +13,7 @@
   const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
   const SLUG = 'petty-small-claims';
 
-  // Aggravator multipliers
+  // Default aggravator multipliers (fallback + seed for AI-generated set)
   const AGG = {
     labeled:   { label: 'it was labeled',  mult: 1.20 },
     denied:    { label: 'they denied it',  mult: 1.35 },
@@ -21,6 +21,10 @@
     pandemic:  { label: 'mid-pandemic',    mult: 1.15 },
     birthday:  { label: 'on my birthday',  mult: 1.75 }
   };
+
+  // Current live aggravator set — starts as default, may be replaced by AI-generated set
+  // keyed by short slug, values { label, mult }
+  let CURRENT_AGG = Object.assign({}, AGG);
 
   // 8 verdict archetypes (ALL flattering to the plaintiff)
   const VERDICTS = [
@@ -95,8 +99,15 @@
   const errEl    = $('#form-error');
   const loaderText = $('#loader-text');
   const chipsEl  = $('#aggravator-chips');
+  const grievanceEl = $('#grievance');
+  const damagesEl   = $('#damages');
+  const suggestBtn  = $('#suggest-btn');
+  const suggestStatus = $('#suggest-status');
 
   let selectedAgg = null;
+  let damagesUserTouched = false;
+  let suggestInflight = false;
+  let lastSuggestHash = 0;
 
   // ---------- Chips ----------
 
@@ -322,7 +333,7 @@
   }
 
   function buildContext({ plaintiff, defendant, grievance, rawDamages, agg }) {
-    const aggDef = AGG[agg];
+    const aggDef = CURRENT_AGG[agg] || AGG[agg] || { label: agg, mult: 1.2 };
     const claim = parseClaimNumber(rawDamages);
     const base  = round2(claim * aggDef.mult);
     return {
@@ -467,16 +478,25 @@
     try { return decodeURIComponent(escape(atob(s))); } catch (e) { return null; }
   }
 
-  function encodeCaseToFragment(ctx, payload) {
+  // Encode case into a base64url blob. `paid` and `paidSig` are optional (for receipt URLs).
+  // `aggSet` is the aggravator set in effect at file-time (so receiver sees the same chip label).
+  function encodeCaseToFragment(ctx, payload, extra) {
     const blob = {
-      v: 1,
+      v: 2,
       p: ctx.plaintiff,
       d: ctx.defendant,
       g: ctx.grievance,
       r: ctx.rawDamages,
       a: ctx.agg,
+      // only include the single selected aggravator (keep fragment small)
+      ag: { label: ctx.aggName, mult: ctx.aggMult },
       ai: payload
     };
+    if (extra && extra.paid) {
+      blob.paid = 1;
+      blob.ps = extra.paidSig || '';
+      if (extra.paidAt) blob.pt = extra.paidAt;
+    }
     return b64urlEncode(JSON.stringify(blob));
   }
 
@@ -486,10 +506,32 @@
     if (!raw) return null;
     try {
       const o = JSON.parse(raw);
-      if (!o || o.v !== 1) return null;
-      if (!o.p || !o.d || !o.g || !o.a || !AGG[o.a] || !o.ai) return null;
+      if (!o) return null;
+      // accept v1 (legacy, built-in aggs) and v2 (embedded agg)
+      if (o.v !== 1 && o.v !== 2) return null;
+      if (!o.p || !o.d || !o.g || !o.a || !o.ai) return null;
+      if (o.v === 1 && !AGG[o.a]) return null;
+      if (o.v === 2 && (!o.ag || !o.ag.label || typeof o.ag.mult !== 'number')) return null;
       return o;
     } catch (e) { return null; }
+  }
+
+  // Deterministic "signed-ish" payment signature derived from case identity.
+  // Not cryptographic — just proves the payer saw this exact case.
+  function paidSignature(ctx) {
+    const basis = [
+      'paid',
+      ctx.plaintiff.toLowerCase(),
+      ctx.defendant.toLowerCase(),
+      ctx.grievance.toLowerCase(),
+      ctx.rawDamages.toLowerCase(),
+      ctx.aggName.toLowerCase(),
+      ctx.aggMult.toFixed(2)
+    ].join('|');
+    // 32-bit mixed hash, base36 for compact fragment
+    const h = hashStr(basis);
+    const h2 = hashStr(basis + '|salt-3f7c');
+    return (h.toString(36) + '-' + h2.toString(36)).slice(0, 24);
   }
 
   // ---------- Screen switching ----------
@@ -502,11 +544,162 @@
 
   // Share button visible via #share (already in DOM). Unhide when judgment renders.
   const shareSection = document.getElementById('share');
+  const paidSection  = document.getElementById('paid-actions');
 
-  function renderAndShow(ctx, payload) {
+  // Role: 'sender' if this browser originally filed the case (we have it in localStorage),
+  //       'receiver' otherwise. Used to decide which paid-flow button to show.
+  function senderHasCase(ctx) {
+    try { return !!localStorage.getItem('psc-sender:' + inputHash(ctx)); }
+    catch (e) { return false; }
+  }
+  function markSenderOwned(ctx) {
+    try { localStorage.setItem('psc-sender:' + inputHash(ctx), '1'); } catch (e) { /* ignore */ }
+  }
+
+  function renderPaidStamp(paidAt) {
+    const doc = document.getElementById('judgment-doc');
+    if (!doc) return;
+    // Avoid double-stamping
+    if (doc.querySelector('.paid-stamp')) return;
+    const stamp = document.createElement('div');
+    stamp.className = 'paid-stamp';
+    stamp.setAttribute('aria-label', 'Paid stamp');
+    const stampInner = document.createElement('div');
+    stampInner.className = 'paid-stamp-inner';
+    stampInner.textContent = 'PAID';
+    const sub = document.createElement('div');
+    sub.className = 'paid-stamp-sub';
+    sub.textContent = paidAt ? ('marked paid ' + paidAt) : 'marked paid by receiver';
+    stamp.appendChild(stampInner);
+    stamp.appendChild(sub);
+    doc.appendChild(stamp);
+  }
+
+  function renderPaidActions(ctx, payload, opts) {
+    if (!paidSection) return;
+    paidSection.innerHTML = '';
+    paidSection.style.display = '';
+
+    const state = opts || {};
+    const isSender = senderHasCase(ctx);
+    const isPaid = !!state.paid;
+    const sigValid = isPaid && state.paidSig === paidSignature(ctx);
+
+    if (isPaid && sigValid) {
+      // Valid receipt. Show "verified paid" strip to everyone.
+      const strip = document.createElement('div');
+      strip.className = 'paid-strip paid-strip-ok';
+      strip.innerHTML = '<strong>Receipt verified.</strong> This claim is marked paid. The signature matches the case.';
+      paidSection.appendChild(strip);
+      return;
+    }
+    if (isPaid && !sigValid) {
+      // Sig mismatch — flag it.
+      const strip = document.createElement('div');
+      strip.className = 'paid-strip paid-strip-bad';
+      strip.innerHTML = '<strong>Paid flag present but signature does not match.</strong> Treat as unverified.';
+      paidSection.appendChild(strip);
+      return;
+    }
+
+    if (isSender) {
+      const note = document.createElement('div');
+      note.className = 'paid-note';
+      note.textContent = 'Share this URL with the defendant. When they mark it paid, they will send you a receipt URL that stamps this page PAID.';
+      paidSection.appendChild(note);
+      return;
+    }
+
+    // Receiver, unpaid — show "Mark as paid"
+    const wrap = document.createElement('div');
+    wrap.className = 'paid-receiver';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mark-paid-btn';
+    btn.textContent = 'MARK THIS CLAIM AS PAID';
+    wrap.appendChild(btn);
+    const hint = document.createElement('p');
+    hint.className = 'paid-hint';
+    hint.textContent = 'Defendants only. Marking paid generates a receipt URL you send back to the plaintiff as proof.';
+    wrap.appendChild(hint);
+
+    const receiptBox = document.createElement('div');
+    receiptBox.className = 'receipt-box hidden';
+    wrap.appendChild(receiptBox);
+
+    btn.addEventListener('click', () => {
+      const sig = paidSignature(ctx);
+      const nowStamp = todayStamp();
+      const frag = encodeCaseToFragment(ctx, payload, { paid: 1, paidSig: sig, paidAt: nowStamp });
+      const receiptUrl = location.origin + location.pathname + '#' + frag;
+      // Update current URL so reload keeps paid state
+      history.replaceState(null, '', '#' + frag);
+      // Stamp the doc
+      renderPaidStamp(nowStamp);
+
+      receiptBox.classList.remove('hidden');
+      receiptBox.innerHTML = '';
+      const lab = document.createElement('div');
+      lab.className = 'receipt-label';
+      lab.textContent = 'Receipt URL — send this back to the plaintiff:';
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.readOnly = true;
+      inp.value = receiptUrl;
+      inp.className = 'receipt-url';
+      const row = document.createElement('div');
+      row.className = 'receipt-row';
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'receipt-copy';
+      copyBtn.textContent = 'COPY RECEIPT URL';
+      copyBtn.addEventListener('click', () => {
+        try {
+          inp.select();
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(receiptUrl)
+              .then(() => { copyBtn.textContent = 'COPIED'; })
+              .catch(() => { copyBtn.textContent = 'SELECT + COPY'; });
+          } else {
+            document.execCommand && document.execCommand('copy');
+            copyBtn.textContent = 'COPIED';
+          }
+        } catch (e) { /* ignore */ }
+      });
+      const shareBtn2 = document.createElement('button');
+      shareBtn2.type = 'button';
+      shareBtn2.className = 'receipt-share';
+      shareBtn2.textContent = 'SHARE';
+      shareBtn2.addEventListener('click', () => {
+        if (navigator.share) {
+          navigator.share({ title: 'Receipt of payment', url: receiptUrl }).catch(() => {});
+        } else {
+          copyBtn.click();
+        }
+      });
+      row.appendChild(copyBtn);
+      row.appendChild(shareBtn2);
+      receiptBox.appendChild(lab);
+      receiptBox.appendChild(inp);
+      receiptBox.appendChild(row);
+
+      // Hide the now-used button
+      btn.style.display = 'none';
+      hint.style.display = 'none';
+    });
+
+    paidSection.appendChild(wrap);
+  }
+
+  function renderAndShow(ctx, payload, opts) {
     const doc = document.getElementById('judgment-doc');
     doc.innerHTML = renderJudgment(ctx, payload);
+    const state = opts || {};
+    if (state.paid && state.paidSig === paidSignature(ctx)) {
+      renderPaidStamp(state.paidAt || '');
+    }
     if (shareSection) shareSection.style.display = '';
+    renderPaidActions(ctx, payload, state);
     show(judgment);
   }
 
@@ -533,6 +726,160 @@
 
   function stopLoading() {
     if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
+  }
+
+  // ---------- AI suggestions for aggravators + damages ----------
+
+  const SUGGEST_SYSTEM_PROMPT = [
+    'You are a dead-pan 1950s court clerk helping a plaintiff shape a small-claims filing.',
+    'You do NOT speak to the user. You do NOT ask follow-up questions. Return strict JSON only.',
+    'Given a plaintiff, defendant, and statement of grievance, you produce:',
+    '  1) five (5) SHORT aggravating-factor chip options tailored to the grievance — each a 2-5 word phrase',
+    '     in the register "it was labeled" / "on my birthday" / "third offense" / "in front of guests".',
+    '     Each gets a multiplier between 1.10 and 1.90 (two decimals). Keep them petty and specific.',
+    '  2) a single suggested dollar-damages figure (number only, 5 to 500, reflecting the pettiness).',
+    'Return strict JSON matching this schema:',
+    '{',
+    '  "aggravators": [ {"label": string, "mult": number}, ... 5 items ],',
+    '  "damages": number',
+    '}',
+    'Do NOT include a currency symbol in damages. Do NOT include commentary. JSON only.'
+  ].join('\n');
+
+  async function callSuggestLLM(plaintiff, defendant, grievance) {
+    const userPrompt = [
+      'Plaintiff: ' + (plaintiff || '(unspecified)'),
+      'Defendant: ' + (defendant || '(unspecified)'),
+      'Grievance: "' + grievance + '"',
+      '',
+      'Return the five tailored aggravator chips and a suggested damages number as JSON.'
+    ].join('\n');
+
+    const body = {
+      slug: SLUG,
+      model: 'gpt-5.4-mini',
+      temperature: 0.4,
+      max_tokens: 400,
+      response_format: 'json_object',
+      messages: [
+        { role: 'system', content: SUGGEST_SYSTEM_PROMPT },
+        { role: 'user',   content: userPrompt }
+      ]
+    };
+
+    const res = await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('http_' + res.status);
+    const data = await res.json();
+    if (!data || typeof data.content !== 'string') throw new Error('bad_shape');
+
+    let parsed;
+    try { parsed = JSON.parse(data.content); } catch (e) { throw new Error('bad_json'); }
+
+    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+    if (!Array.isArray(parsed.aggravators) || parsed.aggravators.length < 3) throw new Error('bad_aggs');
+
+    const aggs = parsed.aggravators.slice(0, 5).map((a, i) => {
+      const label = String(a.label || ('factor ' + (i + 1))).slice(0, 48);
+      let mult = Number(a.mult);
+      if (!isFinite(mult)) mult = 1.2;
+      mult = Math.max(1.05, Math.min(1.95, mult));
+      mult = Math.round(mult * 100) / 100;
+      return { label: label, mult: mult };
+    });
+    // Pad to 5 with defaults if AI gave fewer
+    const fillers = Object.values(AGG);
+    while (aggs.length < 5) aggs.push(fillers[aggs.length % fillers.length]);
+
+    let damages = Number(parsed.damages);
+    if (!isFinite(damages) || damages <= 0) damages = 25;
+    damages = Math.max(5, Math.min(500, damages));
+    damages = Math.round(damages * 100) / 100;
+
+    return { aggravators: aggs, damages: damages };
+  }
+
+  function aggKeyFromLabel(label, idx) {
+    const k = String(label || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24);
+    return (k || ('agg' + idx)) + '-' + idx;
+  }
+
+  function renderAggChips(aggSet) {
+    // aggSet: array of {label, mult}
+    chipsEl.innerHTML = '';
+    const keys = [];
+    const newCurrent = {};
+    aggSet.forEach((a, i) => {
+      const key = aggKeyFromLabel(a.label, i);
+      keys.push(key);
+      newCurrent[key] = { label: a.label, mult: a.mult };
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', 'false');
+      btn.dataset.key = key;
+      btn.dataset.mult = String(a.mult);
+      btn.textContent = a.label + '  ×' + a.mult.toFixed(2);
+      chipsEl.appendChild(btn);
+    });
+    CURRENT_AGG = newCurrent;
+    selectedAgg = null;
+  }
+
+  async function runSuggest(manual) {
+    const grievance = (grievanceEl.value || '').trim();
+    if (!grievance || grievance.length < 6) {
+      if (manual) setSuggestStatus('type a grievance first (6+ chars)');
+      return;
+    }
+    const plaintiff = ($('#plaintiff').value || '').trim();
+    const defendant = ($('#defendant').value || '').trim();
+    const h = hashStr((plaintiff + '|' + defendant + '|' + grievance).toLowerCase());
+    if (h === lastSuggestHash && !manual) return;
+    if (suggestInflight) return;
+    suggestInflight = true;
+    setSuggestStatus('clerk is drafting options…');
+    if (suggestBtn) suggestBtn.disabled = true;
+
+    try {
+      const out = await callSuggestLLM(plaintiff, defendant, grievance);
+      renderAggChips(out.aggravators);
+      if (!damagesUserTouched || manual) {
+        damagesEl.value = '$' + out.damages.toFixed(2);
+        damagesUserTouched = false; // AI-prefilled; user can still override
+      }
+      lastSuggestHash = h;
+      setSuggestStatus('options tailored to your grievance — pick one');
+    } catch (err) {
+      console.warn('[petty] suggest failed:', err && err.message);
+      setSuggestStatus('couldn’t reach the clerk — using default options');
+    } finally {
+      suggestInflight = false;
+      if (suggestBtn) suggestBtn.disabled = false;
+    }
+  }
+
+  function setSuggestStatus(msg) {
+    if (suggestStatus) suggestStatus.textContent = msg || '';
+  }
+
+  // Auto-suggest when user leaves the grievance field
+  if (grievanceEl) {
+    grievanceEl.addEventListener('blur', () => { runSuggest(false); });
+  }
+  if (damagesEl) {
+    damagesEl.addEventListener('input', () => { damagesUserTouched = true; });
+  }
+  if (suggestBtn) {
+    suggestBtn.addEventListener('click', (e) => { e.preventDefault(); runSuggest(true); });
   }
 
   // ---------- Form submit ----------
@@ -569,7 +916,10 @@
     const frag = encodeCaseToFragment(ctx, payload);
     history.replaceState(null, '', '#' + frag);
 
-    renderAndShow(ctx, payload);
+    // Remember that this browser filed this case so we can distinguish sender vs receiver later.
+    markSenderOwned(ctx);
+
+    renderAndShow(ctx, payload, {});
   });
 
   function setErr(msg) {
@@ -583,11 +933,34 @@
     // Clear form
     form.reset();
     selectedAgg = null;
-    chipsEl.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-checked', 'false'));
+    // Restore default aggravator chips (AI may have replaced them)
+    CURRENT_AGG = Object.assign({}, AGG);
+    renderDefaultChips();
+    damagesUserTouched = false;
+    lastSuggestHash = 0;
+    setSuggestStatus('');
     errEl.textContent = '';
     if (shareSection) shareSection.style.display = 'none';
+    if (paidSection) paidSection.style.display = 'none';
     show(intake);
   });
+
+  // Render the built-in default chips back into the DOM (used on boot + reset).
+  function renderDefaultChips() {
+    chipsEl.innerHTML = '';
+    Object.keys(AGG).forEach((key) => {
+      const a = AGG[key];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', 'false');
+      btn.dataset.key = key;
+      btn.dataset.mult = String(a.mult);
+      btn.textContent = a.label;
+      chipsEl.appendChild(btn);
+    });
+  }
 
   // ---------- Share (exposed to onclick) ----------
 
@@ -609,19 +982,44 @@
 
   (function boot() {
     if (shareSection) shareSection.style.display = 'none';
+    if (paidSection) paidSection.style.display = 'none';
 
     const frag = (location.hash || '').replace(/^#/, '');
     const parsed = decodeFragment(frag);
     if (parsed) {
-      // Pre-fill form (for "File another case" affordance)
+      // v2: fragment carries the exact aggravator label+mult used by the sender.
+      // Merge it into CURRENT_AGG so buildContext resolves the same label/mult.
+      if (parsed.v === 2 && parsed.ag) {
+        CURRENT_AGG = Object.assign({}, CURRENT_AGG);
+        CURRENT_AGG[parsed.a] = { label: parsed.ag.label, mult: parsed.ag.mult };
+      }
+
+      // Pre-fill form (for "File another case" affordance). For v2 custom chips,
+      // render a single chip with the embedded label so the form reflects the case.
       $('#plaintiff').value  = parsed.p;
       $('#defendant').value  = parsed.d;
       $('#grievance').value  = parsed.g;
       $('#damages').value    = parsed.r || '';
       selectedAgg = parsed.a;
-      chipsEl.querySelectorAll('.chip').forEach((c) => {
-        c.setAttribute('aria-checked', c.dataset.key === selectedAgg ? 'true' : 'false');
-      });
+      if (parsed.v === 2 && parsed.ag) {
+        // Replace chips with the single embedded chip from the fragment, keeping its original key.
+        CURRENT_AGG = {};
+        CURRENT_AGG[parsed.a] = { label: parsed.ag.label, mult: parsed.ag.mult };
+        chipsEl.innerHTML = '';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', 'true');
+        btn.dataset.key = parsed.a;
+        btn.dataset.mult = String(parsed.ag.mult);
+        btn.textContent = parsed.ag.label + '  ×' + Number(parsed.ag.mult).toFixed(2);
+        chipsEl.appendChild(btn);
+      } else {
+        chipsEl.querySelectorAll('.chip').forEach((c) => {
+          c.setAttribute('aria-checked', c.dataset.key === selectedAgg ? 'true' : 'false');
+        });
+      }
 
       const ctx = buildContext({
         plaintiff: parsed.p,
@@ -634,7 +1032,13 @@
       // Cache by input hash (so reopening = no burn)
       writeCache(ctx, parsed.ai);
 
-      renderAndShow(ctx, parsed.ai);
+      const paidState = {
+        paid: !!parsed.paid,
+        paidSig: parsed.ps || '',
+        paidAt: parsed.pt || ''
+      };
+
+      renderAndShow(ctx, parsed.ai, paidState);
       return;
     }
     show(intake);

@@ -43,12 +43,16 @@
         </div>
 
         <div class="form-row">
-          <label for="damages">4. Damages claimed</label>
+          <label for="damages">4. Damages claimed <span class="label-hint">(the clerk will suggest a figure — you can override)</span></label>
           <input id="damages" name="damages" type="text" maxlength="60" placeholder="$47.12 and my dignity">
         </div>
 
         <div class="form-row">
-          <label class="chip-label">5. Aggravating factor on record</label>
+          <div class="chip-label-row">
+            <label class="chip-label">5. Aggravating factor on record</label>
+            <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft aggravator options from your grievance">DRAFT OPTIONS FROM GRIEVANCE</button>
+          </div>
+          <div id="suggest-status" class="suggest-status" aria-live="polite"></div>
           <div id="aggravator-chips" class="chips" role="radiogroup" aria-label="Aggravating factor">
             <button type="button" class="chip" role="radio" aria-checked="false" data-key="labeled" data-mult="1.20">it was labeled</button>
             <button type="button" class="chip" role="radio" aria-checked="false" data-key="denied" data-mult="1.35">they denied it</button>
@@ -95,6 +99,8 @@
         <button onclick="share()" class="share-btn">SHARE THIS JUDGMENT</button>
         <button id="reset-btn" type="button" class="reset-btn">File another case</button>
       </div>
+
+      <div id="paid-actions" class="paid-actions" aria-live="polite"></div>
     </section>
   </main>
 </body>
