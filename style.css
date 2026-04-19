@@ -600,6 +600,15 @@ textarea::placeholder {
   margin: 4px 0 0;
 }
 
+.agg-summary {
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  min-height: 16px;
+  margin: 6px 0 0;
+}
+
 /* ---------- Paid stamp + actions ---------- */
 
 .paid-stamp {
