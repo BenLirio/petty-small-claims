@@ -1,12 +1,17 @@
 // Petty Small Claims — client logic
-// - Collects 3 text inputs + multi-select aggravator chips
-// - The clerk (LLM) assesses base damages (< $10) and aggravator chips
-// - Combined multiplier compounds with diminishing returns, hard-capped at ×2.50
-// - Falls back to deterministic local generator on any error
-// - Renders an official judgment document
-// - Serializes only the case inputs to the URL fragment (short, SMS-safe)
-// - Caches results by input hash in localStorage
-// - Paid state persisted on sender's device once they view a receipt URL
+//
+// Flow (user-driven, no hidden charges):
+//   1. User enters plaintiff / defendant / grievance.
+//   2. Clerk (LLM) drafts tailored aggravator chips AND tailored itemized-damage chips.
+//      User picks any that apply from BOTH lists. Nothing is tacked on at the end.
+//   3. On file, LLM produces findings / verdict / base damages ONLY.
+//      Total = base damages × aggravator multiplier + sum(selected itemized damages).
+//   4. Local deterministic fallback kicks in on any LLM error.
+//   5. Serializes only case inputs + selected chip keys to the URL fragment.
+//   6. Paid-receipt flow unchanged.
+//
+// Design rule: everything on the judgment must be something the user input or
+// explicitly selected. The clerk never invents surprise line items.
 
 (function () {
   'use strict';
@@ -23,8 +28,22 @@
     birthday:  { label: 'on my birthday',  mult: 1.75 }
   };
 
-  // Current live aggravator set — starts as default, may be replaced by AI-generated set
+  // Default itemized-damage chips (fallback + seed for AI-generated set).
+  // User picks which apply — these are NOT auto-added to the judgment.
+  const ITEM = {
+    tupperware:  { label: 'Tupperware depreciation',   amount: 4.50 },
+    emotional:   { label: 'emotional distress',        amount: 12.00 },
+    spite:       { label: 'interest on spite',         amount: 3.14 },
+    procedural:  { label: 'procedural inconvenience',  amount: 8.88 },
+    principle:   { label: 'principle of the thing',    amount: 1.99 },
+    eyeroll:     { label: 'eye-roll servicing',        amount: 6.25 },
+    groupchat:   { label: 'groupchat reputational harm', amount: 14.40 },
+    sigh:        { label: 'deep-sigh processing',      amount: 0.99 }
+  };
+
+  // Current live sets — may be replaced by AI-generated alternates tailored to grievance.
   let CURRENT_AGG = Object.assign({}, AGG);
+  let CURRENT_ITEM = Object.assign({}, ITEM);
 
   const MAX_COMBINED_MULT = 2.50;
 
@@ -40,35 +59,7 @@
     'Granted, Begrudgingly'
   ];
 
-  // 24 absurd micro-damage line items for the local fallback + dedupe reference
-  const MICRO_POOL = [
-    { label: 'Tupperware depreciation',        amount: 4.50 },
-    { label: 'emotional distress',             amount: 12.00 },
-    { label: 'interest on spite',              amount: 3.14 },
-    { label: 'procedural inconvenience',       amount: 8.88 },
-    { label: 'principle of the thing',         amount: 1.99 },
-    { label: 'time-of-life tax',               amount: 22.17 },
-    { label: 'footnote royalty',               amount: 0.76 },
-    { label: 'eye-roll servicing',             amount: 6.25 },
-    { label: 'groupchat reputational harm',    amount: 14.40 },
-    { label: 'door-slamming vibrations',       amount: 5.55 },
-    { label: 'fridge-space occupancy',         amount: 9.11 },
-    { label: 'passive-aggressive postage',     amount: 2.47 },
-    { label: 'notebook smudge fee',            amount: 1.25 },
-    { label: 'sigh-per-minute overage',        amount: 3.77 },
-    { label: 'conversational fumbling',        amount: 7.62 },
-    { label: 'missed-apology interest',        amount: 11.30 },
-    { label: 'grudge storage lease',           amount: 18.00 },
-    { label: 'therapist referral inconvenience', amount: 25.00 },
-    { label: 'sidewalk glare tax',             amount: 4.04 },
-    { label: 'eyebrow-raising fee',            amount: 2.22 },
-    { label: 'deep-sigh processing',           amount: 0.99 },
-    { label: 'mental receipts filing',         amount: 5.00 },
-    { label: 'unsolicited opinion surcharge',  amount: 13.13 },
-    { label: 'vibes violation',                amount: 7.07 }
-  ];
-
-  // 12 findings templates for the fallback — each echoes the defendant / grievance / aggravator verbatim.
+  // 12 findings templates for the local fallback — each echoes the defendant / grievance / aggravator verbatim.
   const FINDINGS_TEMPLATES = [
     (c) => `The court finds it uncontested that ${c.defendant} did, in fact, ${c.grievance.toLowerCase()}.`,
     (c) => `Witness testimony corroborates the plaintiff's claim that ${c.defendant} committed the act described: "${c.grievance}".`,
@@ -100,20 +91,23 @@
   const form     = $('#case-form');
   const errEl    = $('#form-error');
   const loaderText = $('#loader-text');
-  const chipsEl  = $('#aggravator-chips');
+  const aggChipsEl  = $('#aggravator-chips');
+  const itemChipsEl = $('#item-chips');
   const grievanceEl = $('#grievance');
   const suggestBtn  = $('#suggest-btn');
   const suggestStatus = $('#suggest-status');
   const aggSummary = $('#agg-summary');
+  const itemSummary = $('#item-summary');
 
-  // Multi-select: array of chip keys (order = click order)
+  // Multi-select arrays of chip keys (order = click order)
   let selectedAggs = [];
+  let selectedItems = [];
   let suggestInflight = false;
   let lastSuggestHash = 0;
 
   // ---------- Chips ----------
 
-  chipsEl.addEventListener('click', (e) => {
+  aggChipsEl.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
     const key = chip.dataset.key;
@@ -128,6 +122,23 @@
     updateAggSummary();
   });
 
+  if (itemChipsEl) {
+    itemChipsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      const key = chip.dataset.key;
+      const idx = selectedItems.indexOf(key);
+      if (idx >= 0) {
+        selectedItems.splice(idx, 1);
+        chip.setAttribute('aria-checked', 'false');
+      } else {
+        selectedItems.push(key);
+        chip.setAttribute('aria-checked', 'true');
+      }
+      updateItemSummary();
+    });
+  }
+
   function updateAggSummary() {
     if (!aggSummary) return;
     if (!selectedAggs.length) {
@@ -138,6 +149,20 @@
     const label = selectedAggs.length === 1 ? '1 factor' : (selectedAggs.length + ' factors');
     const capNote = mult >= MAX_COMBINED_MULT - 0.001 ? ' (capped)' : '';
     aggSummary.textContent = label + ' on record — combined multiplier ×' + mult.toFixed(2) + capNote;
+  }
+
+  function updateItemSummary() {
+    if (!itemSummary) return;
+    if (!selectedItems.length) {
+      itemSummary.textContent = '';
+      return;
+    }
+    const sum = selectedItems.reduce((s, k) => {
+      const def = CURRENT_ITEM[k] || ITEM[k];
+      return s + (def ? Number(def.amount) || 0 : 0);
+    }, 0);
+    const label = selectedItems.length === 1 ? '1 line item' : (selectedItems.length + ' line items');
+    itemSummary.textContent = label + ' selected — subtotal ' + fmt$(sum);
   }
 
   // ---------- Hash / RNG ----------
@@ -165,6 +190,7 @@
   // total = 1 + sum( (m_i - 1) * decay^i ), decay=0.6, then hard-capped at 2.50.
   // Stable across selection order because we sort bonuses desc before applying decay.
   function combinedMultiplier(keys) {
+    if (!keys.length) return 1;
     const bonuses = keys.map((k) => {
       const def = CURRENT_AGG[k] || AGG[k];
       if (!def) return 0;
@@ -189,6 +215,14 @@
     return names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1];
   }
 
+  function selectedItemLines(keys) {
+    return keys.map((k) => {
+      const def = CURRENT_ITEM[k] || ITEM[k];
+      if (!def) return null;
+      return { label: def.label, amount: round2(Number(def.amount) || 0) };
+    }).filter(Boolean);
+  }
+
   function round2(n) { return Math.round(n * 100) / 100; }
 
   function fmt$(n) {
@@ -196,22 +230,9 @@
     return '$' + round2(n).toFixed(2);
   }
 
-  // Pick 3 unique micro-damages from MICRO_POOL deterministically from the grievance hash
-  function pickMicros(grievance) {
-    const rand = prng(hashStr(grievance || 'nothing') || 1);
-    const pool = MICRO_POOL.slice();
-    const picks = [];
-    for (let i = 0; i < 3 && pool.length; i++) {
-      const idx = Math.floor(rand() * pool.length);
-      picks.push(pool.splice(idx, 1)[0]);
-    }
-    return picks;
-  }
-
   // Deterministic fallback base damages (< $10), seeded by grievance text.
   function fallbackBaseDamages(grievance) {
     const rand = prng(hashStr((grievance || 'nothing') + '|base') || 1);
-    // Range $1.25 to $9.75, snapped to cents
     const v = 1.25 + rand() * 8.5;
     return round2(v);
   }
@@ -228,6 +249,9 @@
   }
 
   // ---------- Input hash for cache / seed ----------
+  // NOTE: hash does NOT include selected items — items affect only the rendered
+  // total, not the LLM-generated findings / verdict / base. Same base & findings
+  // can be reused even if user toggles itemized line-items.
 
   function inputHash(c) {
     return hashStr([
@@ -254,22 +278,17 @@
     }
 
     const verdict = VERDICTS[h % VERDICTS.length];
-    const micros = pickMicros(ctx.grievance || ctx.defendant || 'nothing').map((m) => ({
-      label: m.label,
-      amount: m.amount
-    }));
 
     return {
       case_number: caseNumberFromHash(h),
       county: pickCounty(h),
       findings,
       verdict_archetype: verdict,
-      micro_damages: micros,
       base_damages: fallbackBaseDamages(ctx.grievance)
     };
   }
 
-  // ---------- LLM call ----------
+  // ---------- LLM call: main judgment ----------
 
   const SYSTEM_PROMPT = [
     'You are a dead-pan 1950s court clerk with a faint contempt for everyone.',
@@ -279,13 +298,13 @@
     'Every finding must quote or directly reference the plaintiff\'s stated grievance text verbatim (or a short verbatim slice of it).',
     'Findings are formal, clipped, faintly contemptuous. No exclamation marks. No modern slang.',
     'Base damages must be STRICTLY LESS than $10.00 and greater than $0.25 — small, petty, specific. The client applies the aggravator multiplier.',
+    'Do NOT invent additional damage line items. The plaintiff picks their own itemized damages from separate chips. You only assess the base.',
     'Return strict JSON matching this schema:',
     '{',
     '  "case_number": string,           // format "26-04-XXXX" (4 digits)',
     '  "county": string,                // e.g. "Circuit Court of West Haversack County"',
     '  "findings": [string, string, string],  // exactly 3',
     '  "verdict_archetype": string,     // MUST be one of the 8 allowed archetypes',
-    '  "micro_damages": [ {"label": string, "amount": number}, ... ],  // exactly 3, labels absurd, amounts $0.50–$25.00',
     '  "base_damages": number           // STRICTLY less than 10.00, greater than 0.25',
     '}',
     'Allowed verdict_archetype values (pick exactly one):',
@@ -299,14 +318,14 @@
       'Grievance: "' + ctx.grievance + '"',
       'Aggravating factors on record: ' + ctx.aggName + ' (combined multiplier ×' + ctx.aggMult.toFixed(2) + ')',
       '',
-      'Fill in the judgment flavor AND assess base damages (under $10) as strict JSON.'
+      'Fill in the judgment flavor AND assess base damages (under $10) as strict JSON. Do NOT add extra damage line items.'
     ].join('\n');
 
     const body = {
       slug: SLUG,
       model: 'gpt-5.4',
       temperature: 0.4,
-      max_tokens: 600,
+      max_tokens: 500,
       response_format: 'json_object',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -328,19 +347,13 @@
     try { parsed = JSON.parse(data.content); }
     catch (e) { throw new Error('bad_json'); }
 
-    // Validate shape
     if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
     if (!Array.isArray(parsed.findings) || parsed.findings.length < 3) throw new Error('bad_findings');
-    if (!Array.isArray(parsed.micro_damages) || parsed.micro_damages.length < 3) throw new Error('bad_micros');
     if (typeof parsed.case_number !== 'string') throw new Error('bad_case');
     if (typeof parsed.county !== 'string') throw new Error('bad_county');
     if (typeof parsed.verdict_archetype !== 'string') throw new Error('bad_verdict');
 
     parsed.findings = parsed.findings.slice(0, 3).map((s) => String(s));
-    parsed.micro_damages = parsed.micro_damages.slice(0, 3).map((m) => ({
-      label: String(m.label || 'petty matter'),
-      amount: Math.max(0, Number(m.amount) || 0)
-    }));
 
     if (VERDICTS.indexOf(parsed.verdict_archetype) < 0) {
       parsed.verdict_archetype = VERDICTS[inputHash(ctx) % VERDICTS.length];
@@ -350,12 +363,15 @@
       parsed.case_number = caseNumberFromHash(inputHash(ctx));
     }
 
-    // Clamp base damages: strictly less than $10, minimum $0.25
     let base = Number(parsed.base_damages);
     if (!isFinite(base) || base <= 0) base = fallbackBaseDamages(ctx.grievance);
     if (base >= 10) base = 9.99;
     if (base < 0.25) base = 0.25;
     parsed.base_damages = round2(base);
+
+    // Strip any micro_damages the model may still have volunteered — we do
+    // not surface them. Line items are user-picked only.
+    delete parsed.micro_damages;
 
     return parsed;
   }
@@ -368,17 +384,21 @@
     try {
       const raw = localStorage.getItem(cacheKey(ctx));
       if (!raw) return null;
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.micro_damages)) delete parsed.micro_damages;
+      return parsed;
     } catch (e) { return null; }
   }
 
   function writeCache(ctx, payload) {
     try {
-      localStorage.setItem(cacheKey(ctx), JSON.stringify(payload));
+      const toSave = Object.assign({}, payload);
+      delete toSave.micro_damages;
+      localStorage.setItem(cacheKey(ctx), JSON.stringify(toSave));
     } catch (e) { /* ignore quota */ }
   }
 
-  function buildContext({ plaintiff, defendant, grievance, aggs }) {
+  function buildContext({ plaintiff, defendant, grievance, aggs, items }) {
     const mult = combinedMultiplier(aggs);
     const name = combinedAggName(aggs);
     return {
@@ -386,6 +406,7 @@
       defendant: defendant.trim(),
       grievance: grievance.trim(),
       aggs: aggs.slice(),
+      items: Array.isArray(items) ? items.slice() : [],
       aggName: name,
       aggMult: mult
     };
@@ -418,16 +439,28 @@
   function renderJudgment(ctx, payload) {
     const base = Number(payload.base_damages) || 0;
     const baseAwarded = round2(base * ctx.aggMult);
-    const baseLabel = `assessed base damages × ${ctx.aggMult.toFixed(2)} (${ctx.aggName})`;
+    const aggPart = ctx.aggs.length
+      ? `assessed base damages × ${ctx.aggMult.toFixed(2)} (${ctx.aggName})`
+      : `assessed base damages (no aggravators on record)`;
     const baseLine = {
-      label: `base damages — ${baseLabel}`,
+      label: `base damages — ${aggPart}`,
       amount: baseAwarded
     };
-    const micros = payload.micro_damages.slice(0, 3);
-    const lines = [baseLine, ...micros];
+
+    // Only user-selected itemized damages — no surprise additions.
+    const itemLines = selectedItemLines(ctx.items || []);
+    const lines = [baseLine, ...itemLines];
     const total = round2(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0));
 
     const countyUpper = payload.county.toUpperCase();
+
+    const aggSectionHtml = ctx.aggs.length ? `
+      <div class="section-hd">Aggravating Factors On Record</div>
+      <div class="agg-line">${escapeHtml(ctx.aggName)} <span class="mult">(combined multiplier: ×${ctx.aggMult.toFixed(2)})</span></div>
+    ` : `
+      <div class="section-hd">Aggravating Factors On Record</div>
+      <div class="agg-line"><em>none selected by the plaintiff.</em></div>
+    `;
 
     const html = `
       <div class="doc-banner">
@@ -452,8 +485,7 @@
       <div class="section-hd">Statement of Grievance</div>
       <div class="grievance-quote">"${escapeHtml(ctx.grievance)}"</div>
 
-      <div class="section-hd">Aggravating Factors On Record</div>
-      <div class="agg-line">${escapeHtml(ctx.aggName)} <span class="mult">(combined multiplier: ×${ctx.aggMult.toFixed(2)})</span></div>
+      ${aggSectionHtml}
 
       <div class="section-hd">Official Findings</div>
       <ul class="findings">
@@ -474,7 +506,7 @@
           </tr>
         </tbody>
       </table>
-      <div class="foot-math">Base = clerk-assessed ${fmt$(base)} × ${ctx.aggMult.toFixed(2)} = ${fmt$(baseAwarded)} (factors: ${escapeHtml(ctx.aggName)})</div>
+      <div class="foot-math">Base = clerk-assessed ${fmt$(base)} × ${ctx.aggMult.toFixed(2)} = ${fmt$(baseAwarded)}${itemLines.length ? ' · ' + itemLines.length + ' line item' + (itemLines.length === 1 ? '' : 's') + ' selected by the plaintiff' : ' · no itemized damages selected'}</div>
 
       <div class="verdict-block">
         <div class="verdict-label">Verdict of the Court</div>
@@ -510,17 +542,23 @@
 
   // ---------- Fragment (share URL) encoding ----------
   //
-  // v3 fragment: inputs only — much shorter than v1/v2. We re-run the LLM (or
-  // hit local cache) on load to regenerate the judgment. This keeps share
-  // URLs short enough that mobile SMS doesn't truncate them into raw text.
+  // v4 fragment: inputs + selected chip keys + custom chip sets. The receiver's
+  // client re-runs the LLM (or hits local cache) to regenerate findings /
+  // verdict / base damages, and reconstructs the judgment's line items from the
+  // selected keys + embedded custom sets.
   //
   // {
-  //   v: 3,
+  //   v: 4,
   //   p: plaintiff, d: defendant, g: grievance,
-  //   a: [aggKey, ...],                      // selected keys
-  //   c: { key: {label, mult}, ... } | null, // custom agg set (only if LLM replaced defaults)
-  //   paid: 1?, ps: sig?, pt: date?          // optional paid-receipt fields
+  //   a: [aggKey, ...],                            // selected aggravator keys
+  //   i: [itemKey, ...],                           // selected itemized-damage keys
+  //   c: { key: {label, mult}, ... } | null,       // custom aggravator set (if LLM drafted)
+  //   ci: { key: {label, amount}, ... } | null,    // custom item set (if LLM drafted)
+  //   paid: 1?, ps: sig?, pt: date?                // optional paid-receipt fields
   // }
+  //
+  // v3 fragments are still decoded; their embedded micro_damages are treated as
+  // the sender's itemized selections so the receiver sees the same line items.
 
   function b64urlEncode(str) {
     const b64 = btoa(unescape(encodeURIComponent(str)));
@@ -544,22 +582,39 @@
     return true;
   }
 
+  function isDefaultItemSet() {
+    const keys = Object.keys(CURRENT_ITEM);
+    if (keys.length !== Object.keys(ITEM).length) return false;
+    for (const k of keys) {
+      const a = CURRENT_ITEM[k], b = ITEM[k];
+      if (!b) return false;
+      if (a.label !== b.label || Math.abs((Number(a.amount) || 0) - (Number(b.amount) || 0)) > 0.001) return false;
+    }
+    return true;
+  }
+
   function encodeCaseToFragment(ctx, extra) {
     const blob = {
-      v: 3,
+      v: 4,
       p: ctx.plaintiff,
       d: ctx.defendant,
       g: ctx.grievance,
-      a: ctx.aggs.slice()
+      a: ctx.aggs.slice(),
+      i: (ctx.items || []).slice()
     };
-    // Only embed custom agg set if it differs from defaults AND includes a selected key
-    // (so a receiver re-opens the exact chip labels the sender saw).
     if (!isDefaultAggSet()) {
       const needed = {};
       ctx.aggs.forEach((k) => {
         if (CURRENT_AGG[k]) needed[k] = { label: CURRENT_AGG[k].label, mult: CURRENT_AGG[k].mult };
       });
       if (Object.keys(needed).length) blob.c = needed;
+    }
+    if (!isDefaultItemSet()) {
+      const needed = {};
+      (ctx.items || []).forEach((k) => {
+        if (CURRENT_ITEM[k]) needed[k] = { label: CURRENT_ITEM[k].label, amount: CURRENT_ITEM[k].amount };
+      });
+      if (Object.keys(needed).length) blob.ci = needed;
     }
     if (extra && extra.paid) {
       blob.paid = 1;
@@ -569,7 +624,7 @@
     return b64urlEncode(JSON.stringify(blob));
   }
 
-  // Legacy v1/v2 decode for backwards compatibility with URLs already in the wild.
+  // Decode v1..v4 for back-compat.
   function decodeFragment(frag) {
     if (!frag || frag.length < 4) return null;
     const raw = b64urlDecode(frag);
@@ -578,11 +633,14 @@
       const o = JSON.parse(raw);
       if (!o) return null;
 
+      if (o.v === 4) {
+        if (!o.p || !o.d || !o.g || !Array.isArray(o.a)) return null;
+        return { version: 4, blob: o };
+      }
       if (o.v === 3) {
         if (!o.p || !o.d || !o.g || !Array.isArray(o.a)) return null;
         return { version: 3, blob: o };
       }
-      // v1/v2 legacy single-agg fragments
       if (o.v === 1 || o.v === 2) {
         if (!o.p || !o.d || !o.g || !o.a || !o.ai) return null;
         if (o.v === 1 && !AGG[o.a]) return null;
@@ -594,7 +652,6 @@
   }
 
   // Deterministic payment signature derived from case identity.
-  // Not cryptographic — just proves the payer saw this exact case.
   function paidSignature(ctx) {
     const basis = [
       'paid',
@@ -602,7 +659,8 @@
       ctx.defendant.toLowerCase(),
       ctx.grievance.toLowerCase(),
       ctx.aggName.toLowerCase(),
-      ctx.aggMult.toFixed(2)
+      ctx.aggMult.toFixed(2),
+      (ctx.items || []).slice().sort().join(',')
     ].join('|');
     const h = hashStr(basis);
     const h2 = hashStr(basis + '|salt-3f7c');
@@ -620,7 +678,6 @@
   const shareSection = document.getElementById('share');
   const paidSection  = document.getElementById('paid-actions');
 
-  // Sender owns the case if they filed it on this device (localStorage flag).
   function senderHasCase(ctx) {
     try { return !!localStorage.getItem('psc-sender:' + inputHash(ctx)); }
     catch (e) { return false; }
@@ -629,10 +686,6 @@
     try { localStorage.setItem('psc-sender:' + inputHash(ctx), '1'); } catch (e) { /* ignore */ }
   }
 
-  // Paid state persistence: once the sender visits any URL carrying a valid
-  // paid flag + matching signature for this case, we persist "paid" on the
-  // sender's device. Subsequent visits to the original (non-receipt) URL show
-  // the PAID stamp.
   function markPaidLocally(ctx, paidAt) {
     try { localStorage.setItem('psc-paid:' + inputHash(ctx), paidAt || '1'); }
     catch (e) { /* ignore */ }
@@ -671,13 +724,10 @@
     const sigValid = isPaidInUrl && state.paidSig === paidSignature(ctx);
     const locallyPaid = readPaidLocally(ctx);
 
-    // If URL shows paid with a valid sig, and the viewer is the sender,
-    // remember paid locally for future visits to the original URL.
     if (isSender && isPaidInUrl && sigValid) {
       markPaidLocally(ctx, state.paidAt || todayStamp());
     }
 
-    // "Paid" is considered established if: URL says paid (with valid sig) OR sender has seen a valid receipt before.
     const effectivelyPaid = (isPaidInUrl && sigValid) || !!locallyPaid;
 
     if (effectivelyPaid) {
@@ -704,7 +754,6 @@
       return;
     }
 
-    // Receiver, unpaid — show "Mark as paid"
     const wrap = document.createElement('div');
     wrap.className = 'paid-receiver';
     const btn = document.createElement('button');
@@ -806,7 +855,7 @@
     'consulting the clerk…',
     'reviewing precedent…',
     'drafting the findings…',
-    'assessing the damages…'
+    'assessing the base damages…'
   ];
   let loadTimer = null;
 
@@ -824,21 +873,38 @@
     if (loadTimer) { clearInterval(loadTimer); loadTimer = null; }
   }
 
-  // ---------- AI suggestions for aggravators ----------
+  // ---------- AI suggestions for aggravators + itemized damages ----------
+  //
+  // Single LLM call returns BOTH chip sets so the user gets a cohesive, tailored
+  // palette to pick from on the intake form.
 
   const SUGGEST_SYSTEM_PROMPT = [
     'You are a world-class comedy writer impersonating a dead-pan 1950s court clerk.',
-    'You help a plaintiff shape a mock small-claims filing by drafting aggravating-factor chips.',
+    'You help a plaintiff shape a mock small-claims filing by drafting TWO chip palettes:',
+    '  (A) Aggravating-factor chips — conditions that multiply the base damages.',
+    '  (B) Itemized-damage chips — specific absurd line-items the plaintiff can choose to include.',
+    'The plaintiff selects WHICH of each they want on record. You do not add anything automatically.',
     'You do NOT speak to the user. You do NOT ask follow-up questions. Return strict JSON only.',
-    'Given a plaintiff, defendant, and statement of grievance, produce SIX (6) SHORT aggravating-factor chip options.',
-    'HARD requirements for every chip:',
-    '  - 2 to 6 words. No trailing period. No quotes.',
+    '',
+    'HARD requirements for aggravator chips:',
+    '  - 6 chips. 2 to 6 words each. No trailing period. No quotes.',
     '  - Register: "it was labeled" / "on my birthday" / "third offense" / "in front of guests" / "after I warned them".',
-    '  - Each chip must be SPECIFICALLY tailored to THIS grievance, not generic. Re-read the grievance and reference a concrete detail, witness, timing, or pattern it implies.',
+    '  - Each chip SPECIFICALLY tailored to THIS grievance — reference a concrete detail, witness, timing, or pattern it implies.',
     '  - Funny, petty, specific. Avoid cliché (no "adds insult to injury", no "salt in the wound").',
-    '  - Each gets a multiplier between 1.10 and 1.85 (two decimals). Petty small things ~1.10-1.25; genuinely aggravating things ~1.50-1.85.',
+    '  - Multiplier 1.10 to 1.85, two decimals. Petty small things ~1.10-1.25; genuinely aggravating ~1.50-1.85.',
+    '',
+    'HARD requirements for itemized-damage chips:',
+    '  - 6 chips. Each is a short comedic line-item label (2 to 5 words) plus a dollar amount.',
+    '  - Each tailored to THIS grievance — reference the specific situation, object, or injury.',
+    '  - Label examples: "Tupperware depreciation", "groupchat reputational harm", "eye-roll servicing", "sidewalk glare tax".',
+    '  - Amount 0.50 to 25.00, two decimals, petty and specific (odd cents encouraged).',
+    '  - No trailing period. No quotes in labels.',
+    '',
     'Return strict JSON:',
-    '{ "aggravators": [ {"label": string, "mult": number}, ... exactly 6 items ] }',
+    '{',
+    '  "aggravators": [ {"label": string, "mult": number}, ... exactly 6 ],',
+    '  "items":       [ {"label": string, "amount": number}, ... exactly 6 ]',
+    '}',
     'No commentary. No preface. JSON only.'
   ].join('\n');
 
@@ -848,14 +914,14 @@
       'Defendant: ' + (defendant || '(unspecified)'),
       'Grievance: "' + grievance + '"',
       '',
-      'Return six tailored aggravator chips as JSON.'
+      'Return six tailored aggravator chips AND six tailored itemized-damage chips as JSON.'
     ].join('\n');
 
     const body = {
       slug: SLUG,
       model: 'gpt-5.4',
       temperature: 0.55,
-      max_tokens: 400,
+      max_tokens: 700,
       response_format: 'json_object',
       messages: [
         { role: 'system', content: SUGGEST_SYSTEM_PROMPT },
@@ -874,9 +940,9 @@
 
     let parsed;
     try { parsed = JSON.parse(data.content); } catch (e) { throw new Error('bad_json'); }
-
     if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
     if (!Array.isArray(parsed.aggravators) || parsed.aggravators.length < 3) throw new Error('bad_aggs');
+    if (!Array.isArray(parsed.items) || parsed.items.length < 3) throw new Error('bad_items');
 
     const aggs = parsed.aggravators.slice(0, 6).map((a, i) => {
       const label = String(a.label || ('factor ' + (i + 1))).replace(/["'\.]+$/g, '').slice(0, 48);
@@ -886,26 +952,37 @@
       mult = Math.round(mult * 100) / 100;
       return { label: label, mult: mult };
     });
-    const fillers = Object.values(AGG);
-    while (aggs.length < 6) aggs.push(fillers[aggs.length % fillers.length]);
+    const aggFillers = Object.values(AGG);
+    while (aggs.length < 6) aggs.push(aggFillers[aggs.length % aggFillers.length]);
 
-    return { aggravators: aggs };
+    const items = parsed.items.slice(0, 6).map((a, i) => {
+      const label = String(a.label || ('line item ' + (i + 1))).replace(/["'\.]+$/g, '').slice(0, 56);
+      let amount = Number(a.amount);
+      if (!isFinite(amount)) amount = 2.50;
+      amount = Math.max(0.25, Math.min(25.00, amount));
+      amount = Math.round(amount * 100) / 100;
+      return { label: label, amount: amount };
+    });
+    const itemFillers = Object.values(ITEM);
+    while (items.length < 6) items.push(itemFillers[items.length % itemFillers.length]);
+
+    return { aggravators: aggs, items: items };
   }
 
-  function aggKeyFromLabel(label, idx) {
+  function keyFromLabel(prefix, label, idx) {
     const k = String(label || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 24);
-    return (k || ('agg' + idx)) + '-' + idx;
+    return (k || (prefix + idx)) + '-' + idx;
   }
 
   function renderAggChips(aggSet) {
-    chipsEl.innerHTML = '';
+    aggChipsEl.innerHTML = '';
     const newCurrent = {};
     aggSet.forEach((a, i) => {
-      const key = aggKeyFromLabel(a.label, i);
+      const key = keyFromLabel('agg', a.label, i);
       newCurrent[key] = { label: a.label, mult: a.mult };
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -915,11 +992,33 @@
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
       btn.textContent = a.label + '  ×' + a.mult.toFixed(2);
-      chipsEl.appendChild(btn);
+      aggChipsEl.appendChild(btn);
     });
     CURRENT_AGG = newCurrent;
     selectedAggs = [];
     updateAggSummary();
+  }
+
+  function renderItemChips(itemSet) {
+    if (!itemChipsEl) return;
+    itemChipsEl.innerHTML = '';
+    const newCurrent = {};
+    itemSet.forEach((a, i) => {
+      const key = keyFromLabel('item', a.label, i);
+      newCurrent[key] = { label: a.label, amount: a.amount };
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'checkbox');
+      btn.setAttribute('aria-checked', 'false');
+      btn.dataset.key = key;
+      btn.dataset.amount = String(a.amount);
+      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      itemChipsEl.appendChild(btn);
+    });
+    CURRENT_ITEM = newCurrent;
+    selectedItems = [];
+    updateItemSummary();
   }
 
   async function runSuggest(manual) {
@@ -940,8 +1039,9 @@
     try {
       const out = await callSuggestLLM(plaintiff, defendant, grievance);
       renderAggChips(out.aggravators);
+      renderItemChips(out.items);
       lastSuggestHash = h;
-      setSuggestStatus('options tailored to your grievance — pick as many as apply');
+      setSuggestStatus('aggravators and line-items tailored — pick any that apply');
     } catch (err) {
       console.warn('[petty] suggest failed:', err && err.message);
       setSuggestStatus('couldn’t reach the clerk — using default options');
@@ -975,9 +1075,18 @@
     if (!plaintiff)  return setErr('The clerk needs a plaintiff name, please.');
     if (!defendant)  return setErr('A case needs a defendant — any name will do.');
     if (!grievance)  return setErr('State your grievance, however small.');
-    if (!selectedAggs.length) return setErr('Please select at least one aggravating factor chip.');
+    // Aggravators & items are BOTH optional — the judgment always has at least
+    // the base damages line, so the user can file a minimal case if they want.
+    // But we nudge toward at least one selection so the result isn't bare.
+    if (!selectedAggs.length && !selectedItems.length) {
+      return setErr('Pick at least one aggravator OR itemized damage to put on record.');
+    }
 
-    const ctx = buildContext({ plaintiff, defendant, grievance, aggs: selectedAggs });
+    const ctx = buildContext({
+      plaintiff, defendant, grievance,
+      aggs: selectedAggs,
+      items: selectedItems
+    });
 
     startLoading();
     const t0 = performance.now();
@@ -1009,19 +1118,23 @@
     history.replaceState(null, '', location.pathname + location.search);
     form.reset();
     selectedAggs = [];
+    selectedItems = [];
     CURRENT_AGG = Object.assign({}, AGG);
-    renderDefaultChips();
+    CURRENT_ITEM = Object.assign({}, ITEM);
+    renderDefaultAggChips();
+    renderDefaultItemChips();
     lastSuggestHash = 0;
     setSuggestStatus('');
     updateAggSummary();
+    updateItemSummary();
     errEl.textContent = '';
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
     show(intake);
   });
 
-  function renderDefaultChips() {
-    chipsEl.innerHTML = '';
+  function renderDefaultAggChips() {
+    aggChipsEl.innerHTML = '';
     Object.keys(AGG).forEach((key) => {
       const a = AGG[key];
       const btn = document.createElement('button');
@@ -1032,7 +1145,24 @@
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
       btn.textContent = a.label;
-      chipsEl.appendChild(btn);
+      aggChipsEl.appendChild(btn);
+    });
+  }
+
+  function renderDefaultItemChips() {
+    if (!itemChipsEl) return;
+    itemChipsEl.innerHTML = '';
+    Object.keys(ITEM).forEach((key) => {
+      const a = ITEM[key];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'checkbox');
+      btn.setAttribute('aria-checked', 'false');
+      btn.dataset.key = key;
+      btn.dataset.amount = String(a.amount);
+      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      itemChipsEl.appendChild(btn);
     });
   }
 
@@ -1055,15 +1185,19 @@
   // ---------- Boot: hydrate from #fragment if present ----------
 
   (async function boot() {
+    // Draw default item chips (HTML has default aggravator chips inline).
+    renderDefaultItemChips();
+
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
 
     const frag = (location.hash || '').replace(/^#/, '');
     const decoded = decodeFragment(frag);
 
-    if (decoded && decoded.version === 3) {
+    if (decoded && decoded.version === 4) {
       const o = decoded.blob;
-      // Reconstruct custom agg set if present (sender used AI-generated chips)
+
+      // Reconstruct custom aggravator set
       if (o.c && typeof o.c === 'object') {
         CURRENT_AGG = {};
         Object.keys(o.c).forEach((k) => {
@@ -1074,37 +1208,34 @@
         CURRENT_AGG = Object.assign({}, AGG);
       }
 
-      // Pre-fill form
+      // Reconstruct custom item set
+      if (o.ci && typeof o.ci === 'object') {
+        CURRENT_ITEM = {};
+        Object.keys(o.ci).forEach((k) => {
+          const a = o.ci[k];
+          CURRENT_ITEM[k] = { label: String(a.label || k), amount: Number(a.amount) || 1.00 };
+        });
+      } else {
+        CURRENT_ITEM = Object.assign({}, ITEM);
+      }
+
       $('#plaintiff').value = o.p;
       $('#defendant').value = o.d;
       $('#grievance').value = o.g;
-      // Render chips from CURRENT_AGG so the form reflects the embedded set
-      chipsEl.innerHTML = '';
-      Object.keys(CURRENT_AGG).forEach((key) => {
-        const a = CURRENT_AGG[key];
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'chip';
-        btn.setAttribute('role', 'checkbox');
-        const isChecked = Array.isArray(o.a) && o.a.indexOf(key) >= 0;
-        btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
-        btn.dataset.key = key;
-        btn.dataset.mult = String(a.mult);
-        // Always show multiplier inline on rehydrated chips so the receiver sees it.
-        btn.textContent = a.label + '  ×' + Number(a.mult).toFixed(2);
-        chipsEl.appendChild(btn);
-      });
+
+      renderHydratedAggChips(o.a || []);
+      renderHydratedItemChips(o.i || []);
+
       selectedAggs = Array.isArray(o.a) ? o.a.slice() : [];
+      selectedItems = Array.isArray(o.i) ? o.i.slice() : [];
       updateAggSummary();
+      updateItemSummary();
 
       const ctx = buildContext({
-        plaintiff: o.p,
-        defendant: o.d,
-        grievance: o.g,
-        aggs: selectedAggs
+        plaintiff: o.p, defendant: o.d, grievance: o.g,
+        aggs: selectedAggs, items: selectedItems
       });
 
-      // Try cache first, else call LLM, else fallback
       let payload = readCache(ctx);
       if (!payload) {
         startLoading();
@@ -1123,27 +1254,97 @@
         paidSig: o.ps || '',
         paidAt: o.pt || ''
       };
-
       renderAndShow(ctx, payload, paidState);
       return;
     }
 
-    // Legacy v1/v2: they carry the AI payload inline. Render as before.
-    if (decoded && (decoded.version === 1 || decoded.version === 2)) {
+    if (decoded && decoded.version === 3) {
+      // v3 had micro_damages baked into the cached payload. Treat them as the
+      // sender's chosen itemized line items so receivers see the same doc.
       const o = decoded.blob;
-      if (o.v === 2 && o.ag) {
-        CURRENT_AGG = Object.assign({}, CURRENT_AGG);
-        CURRENT_AGG[o.a] = { label: o.ag.label, mult: o.ag.mult };
+
+      if (o.c && typeof o.c === 'object') {
+        CURRENT_AGG = {};
+        Object.keys(o.c).forEach((k) => {
+          const a = o.c[k];
+          CURRENT_AGG[k] = { label: String(a.label || k), mult: Number(a.mult) || 1.2 };
+        });
+      } else {
+        CURRENT_AGG = Object.assign({}, AGG);
       }
+      CURRENT_ITEM = Object.assign({}, ITEM);
+
       $('#plaintiff').value = o.p;
       $('#defendant').value = o.d;
       $('#grievance').value = o.g;
-      selectedAggs = [o.a];
+      renderHydratedAggChips(o.a || []);
 
-      chipsEl.innerHTML = '';
+      selectedAggs = Array.isArray(o.a) ? o.a.slice() : [];
+      updateAggSummary();
+
+      const ctx = buildContext({
+        plaintiff: o.p, defendant: o.d, grievance: o.g,
+        aggs: selectedAggs, items: []
+      });
+
+      // Pull cached v3 payload if present — it has micro_damages.
+      let cached = null;
+      try {
+        const raw = localStorage.getItem('psc:' + inputHash(ctx));
+        if (raw) cached = JSON.parse(raw);
+      } catch (e) { cached = null; }
+
+      let payload;
+      if (cached) {
+        payload = Object.assign({}, cached);
+      } else {
+        startLoading();
+        try { payload = await callLLM(ctx); }
+        catch (err) { payload = fallbackPayload(ctx); }
+        stopLoading();
+      }
+
+      // Absorb any old micro_damages from the cache as itemized line-items so
+      // the receiver still sees a populated judgment.
+      if (Array.isArray(cached && cached.micro_damages) && cached.micro_damages.length) {
+        const tmp = {};
+        const keys = [];
+        cached.micro_damages.slice(0, 3).forEach((m, i) => {
+          const k = keyFromLabel('item', m.label || ('item' + i), i);
+          tmp[k] = { label: String(m.label || 'petty matter'), amount: Math.max(0, Number(m.amount) || 0) };
+          keys.push(k);
+        });
+        CURRENT_ITEM = tmp;
+        selectedItems = keys;
+        ctx.items = keys.slice();
+        updateItemSummary();
+      }
+
+      delete payload.micro_damages;
+      writeCache(ctx, payload);
+
+      const paidState = {
+        paid: !!o.paid,
+        paidSig: o.ps || '',
+        paidAt: o.pt || ''
+      };
+      renderAndShow(ctx, payload, paidState);
+      return;
+    }
+
+    // Legacy v1/v2: pre-existing behavior.
+    if (decoded && (decoded.version === 1 || decoded.version === 2)) {
+      const o = decoded.blob;
+      $('#plaintiff').value = o.p;
+      $('#defendant').value = o.d;
+      $('#grievance').value = o.g;
+
       const def = (o.v === 2 && o.ag) ? o.ag : (AGG[o.a] || { label: o.a, mult: 1.2 });
       CURRENT_AGG = {};
       CURRENT_AGG[o.a] = { label: def.label, mult: def.mult };
+      CURRENT_ITEM = Object.assign({}, ITEM);
+
+      aggChipsEl.innerHTML = '';
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chip';
@@ -1152,25 +1353,36 @@
       btn.dataset.key = o.a;
       btn.dataset.mult = String(def.mult);
       btn.textContent = def.label + '  ×' + Number(def.mult).toFixed(2);
-      chipsEl.appendChild(btn);
+      aggChipsEl.appendChild(btn);
+      selectedAggs = [o.a];
       updateAggSummary();
 
       const ctx = buildContext({
-        plaintiff: o.p,
-        defendant: o.d,
-        grievance: o.g,
-        aggs: [o.a]
+        plaintiff: o.p, defendant: o.d, grievance: o.g,
+        aggs: [o.a], items: []
       });
 
-      // Legacy payload carries AI data directly — synthesize a v3-shaped payload.
       const ai = o.ai || {};
+      // Absorb legacy inline micro_damages as itemized line items.
+      if (Array.isArray(ai.micro_damages) && ai.micro_damages.length) {
+        const tmp = {};
+        const keys = [];
+        ai.micro_damages.slice(0, 3).forEach((m, i) => {
+          const k = keyFromLabel('item', m.label || ('item' + i), i);
+          tmp[k] = { label: String(m.label || 'petty matter'), amount: Math.max(0, Number(m.amount) || 0) };
+          keys.push(k);
+        });
+        CURRENT_ITEM = tmp;
+        selectedItems = keys;
+        ctx.items = keys.slice();
+        updateItemSummary();
+      }
+
       const payload = {
         case_number: ai.case_number || caseNumberFromHash(inputHash(ctx)),
         county: ai.county || pickCounty(inputHash(ctx)),
         findings: Array.isArray(ai.findings) ? ai.findings.slice(0, 3) : fallbackPayload(ctx).findings,
         verdict_archetype: ai.verdict_archetype || VERDICTS[inputHash(ctx) % VERDICTS.length],
-        micro_damages: Array.isArray(ai.micro_damages) ? ai.micro_damages.slice(0, 3) : fallbackPayload(ctx).micro_damages,
-        // Legacy URLs don't carry base_damages; fall back to deterministic < $10.
         base_damages: fallbackBaseDamages(o.g)
       };
       writeCache(ctx, payload);
@@ -1186,5 +1398,40 @@
 
     show(intake);
   })();
+
+  function renderHydratedAggChips(selectedKeys) {
+    aggChipsEl.innerHTML = '';
+    Object.keys(CURRENT_AGG).forEach((key) => {
+      const a = CURRENT_AGG[key];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'checkbox');
+      const isChecked = Array.isArray(selectedKeys) && selectedKeys.indexOf(key) >= 0;
+      btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+      btn.dataset.key = key;
+      btn.dataset.mult = String(a.mult);
+      btn.textContent = a.label + '  ×' + Number(a.mult).toFixed(2);
+      aggChipsEl.appendChild(btn);
+    });
+  }
+
+  function renderHydratedItemChips(selectedKeys) {
+    if (!itemChipsEl) return;
+    itemChipsEl.innerHTML = '';
+    Object.keys(CURRENT_ITEM).forEach((key) => {
+      const a = CURRENT_ITEM[key];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.setAttribute('role', 'checkbox');
+      const isChecked = Array.isArray(selectedKeys) && selectedKeys.indexOf(key) >= 0;
+      btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+      btn.dataset.key = key;
+      btn.dataset.amount = String(a.amount);
+      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      itemChipsEl.appendChild(btn);
+    });
+  }
 
 })();

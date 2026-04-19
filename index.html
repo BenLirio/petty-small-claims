@@ -45,7 +45,7 @@
         <div class="form-row">
           <div class="chip-label-row">
             <label class="chip-label">4. Aggravating factors on record <span class="label-hint">(pick any that apply — multipliers compound with diminishing returns, capped at ×2.50)</span></label>
-            <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft aggravator options from your grievance">DRAFT OPTIONS FROM GRIEVANCE</button>
+            <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft chip options from your grievance">DRAFT OPTIONS FROM GRIEVANCE</button>
           </div>
           <div id="suggest-status" class="suggest-status" aria-live="polite"></div>
           <div id="aggravator-chips" class="chips" role="group" aria-label="Aggravating factors">
@@ -58,10 +58,18 @@
           <div id="agg-summary" class="agg-summary" aria-live="polite"></div>
         </div>
 
+        <div class="form-row">
+          <label class="chip-label">5. Itemized petty damages <span class="label-hint">(pick any line items to put on record — nothing is added unless you pick it)</span></label>
+          <div id="item-chips" class="chips" role="group" aria-label="Itemized damages">
+            <!-- Rendered by JS (defaults + any AI-tailored set) -->
+          </div>
+          <div id="item-summary" class="agg-summary" aria-live="polite"></div>
+        </div>
+
         <div id="form-error" class="form-error" aria-live="polite"></div>
 
         <button id="file-btn" type="submit" class="file-btn">FILE THE CASE</button>
-        <p class="disclaimer">Not a real court. No legal advice. Not even close. Damages are assessed by the clerk.</p>
+        <p class="disclaimer">Not a real court. No legal advice. Not even close. The clerk never tacks on hidden damages — what you see on the judgment is what you picked.</p>
       </form>
     </section>
 
