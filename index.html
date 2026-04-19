@@ -27,60 +27,71 @@
       </header>
 
       <form id="case-form" novalidate>
-        <div class="form-row">
-          <label for="plaintiff">1. Plaintiff (your full name)</label>
-          <input id="plaintiff" name="plaintiff" type="text" autocomplete="name" maxlength="60" placeholder="e.g. Jordan P. Reeves">
-        </div>
-
-        <div class="form-row">
-          <label for="defendant">2. Defendant</label>
-          <input id="defendant" name="defendant" type="text" maxlength="60" placeholder="my roommate / my cat / the USPS">
-        </div>
-
-        <div class="form-row">
-          <label for="grievance">3. Statement of grievance</label>
-          <textarea id="grievance" name="grievance" maxlength="280" rows="3" placeholder="ate my labeled leftovers"></textarea>
-        </div>
-
-        <div class="form-row">
-          <div class="chip-label-row">
-            <label class="chip-label">4. Aggravating factors <span class="label-hint">(optional — each adds a small multiplier, combined cap ×1.99)</span></label>
-            <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft chip options from your grievance">TAILOR TO GRIEVANCE</button>
+        <!-- STEP 1 — who + what -->
+        <div id="step-1" class="step step-active" data-step="1">
+          <div class="form-row">
+            <label for="plaintiff">1. Your name</label>
+            <input id="plaintiff" name="plaintiff" type="text" autocomplete="name" maxlength="60" placeholder="e.g. Jordan P. Reeves">
           </div>
-          <div id="suggest-status" class="suggest-status" aria-live="polite"></div>
-          <div id="aggravator-chips" class="chips" role="group" aria-label="Aggravating factors">
-            <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="labeled" data-mult="1.15">it was labeled</button>
-            <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="denied" data-mult="1.25">they denied it</button>
-            <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="third" data-mult="1.35">third offense</button>
-            <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="birthday" data-mult="1.45">on my birthday</button>
+
+          <div class="form-row">
+            <label for="defendant">2. Who owes you</label>
+            <input id="defendant" name="defendant" type="text" maxlength="60" placeholder="my roommate / my cat / the USPS">
           </div>
-          <div id="agg-summary" class="agg-summary" aria-live="polite"></div>
+
+          <div class="form-row">
+            <label for="grievance">3. What they did</label>
+            <textarea id="grievance" name="grievance" maxlength="280" rows="3" placeholder="ate my labeled leftovers"></textarea>
+          </div>
+
+          <button id="continue-btn" type="button" class="continue-btn" disabled>CONTINUE →</button>
         </div>
 
-        <div class="form-row">
-          <label class="chip-label">5. Petty damages <span class="label-hint">(optional — sub-$5 line items; tap to add)</span></label>
-          <div id="item-chips" class="chips" role="group" aria-label="Itemized damages">
-            <!-- Rendered by JS (defaults + any AI-tailored set) -->
-          </div>
-          <div id="custom-item-row" class="custom-item-row">
-            <button id="custom-item-toggle" type="button" class="custom-item-toggle">+ other (write your own)</button>
-            <div id="custom-item-editor" class="custom-item-editor hidden">
-              <input id="custom-item-label" type="text" maxlength="42" placeholder="e.g. ruined my morning" aria-label="Custom line-item label">
-              <div class="custom-item-amt-row">
-                <span class="custom-dollar">$</span>
-                <input id="custom-item-amount" type="number" step="0.01" min="0.25" max="4.99" placeholder="1.50" aria-label="Custom line-item amount">
-                <button id="custom-item-add" type="button" class="custom-item-add">ADD</button>
-              </div>
-              <p class="custom-item-hint">Max $4.99 — this court only hears petty matters.</p>
+        <!-- STEP 2 — optional extras, revealed only after step 1 is complete -->
+        <div id="step-2" class="step step-hidden" data-step="2" aria-hidden="true">
+          <p class="step-caption">Anything else for the record? <span class="step-caption-sub">(optional)</span></p>
+
+          <div class="form-row">
+            <div class="chip-label-row">
+              <label class="chip-label">Aggravating factors</label>
+              <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft chip options tailored to your grievance">TAILOR TO GRIEVANCE</button>
             </div>
+            <div id="suggest-status" class="suggest-status" aria-live="polite"></div>
+            <div id="aggravator-chips" class="chips" role="group" aria-label="Aggravating factors">
+              <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="labeled" data-mult="1.15">it was labeled</button>
+              <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="denied" data-mult="1.25">they denied it</button>
+              <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="third" data-mult="1.35">third offense</button>
+              <button type="button" class="chip" role="checkbox" aria-checked="false" data-key="birthday" data-mult="1.45">on my birthday</button>
+            </div>
+            <div id="agg-summary" class="agg-summary" aria-live="polite"></div>
           </div>
-          <div id="item-summary" class="agg-summary" aria-live="polite"></div>
+
+          <div class="form-row">
+            <label class="chip-label">Petty damages <span class="label-hint">(sub-$5 line items)</span></label>
+            <div id="item-chips" class="chips" role="group" aria-label="Itemized damages">
+              <!-- Rendered by JS -->
+            </div>
+            <div id="custom-item-row" class="custom-item-row">
+              <button id="custom-item-toggle" type="button" class="custom-item-toggle">+ other (write your own)</button>
+              <div id="custom-item-editor" class="custom-item-editor hidden">
+                <input id="custom-item-label" type="text" maxlength="42" placeholder="e.g. ruined my morning" aria-label="Custom line-item label">
+                <div class="custom-item-amt-row">
+                  <span class="custom-dollar">$</span>
+                  <input id="custom-item-amount" type="number" step="0.01" min="0.25" max="4.99" placeholder="1.50" aria-label="Custom line-item amount">
+                  <button id="custom-item-add" type="button" class="custom-item-add">ADD</button>
+                </div>
+                <p class="custom-item-hint">Max $4.99 — this court only hears petty matters.</p>
+              </div>
+            </div>
+            <div id="item-summary" class="agg-summary" aria-live="polite"></div>
+          </div>
+
+          <div id="form-error" class="form-error" aria-live="polite"></div>
+
+          <button id="file-btn" type="submit" class="file-btn">FILE THE CASE</button>
+          <button id="back-btn" type="button" class="back-btn">← back</button>
+          <p class="disclaimer">Not a real court. No legal advice. Not even close. Total is always under $20 — pettiness is the point.</p>
         </div>
-
-        <div id="form-error" class="form-error" aria-live="polite"></div>
-
-        <button id="file-btn" type="submit" class="file-btn">FILE THE CASE</button>
-        <p class="disclaimer">Not a real court. No legal advice. Not even close. The clerk never tacks on hidden damages — what you see on the judgment is what you picked. Total is always under $20, because pettiness is the point.</p>
       </form>
     </section>
 
@@ -111,7 +122,8 @@
       </article>
 
       <div id="share" class="share-row">
-        <button onclick="share()" class="share-btn">SHARE THIS JUDGMENT</button>
+        <p class="share-preamble">Serve this notice on the defendant — this is how you collect.</p>
+        <button onclick="serveDefendant()" class="share-btn" id="serve-btn">SERVE THE DEFENDANT</button>
         <button id="reset-btn" type="button" class="reset-btn">File another case</button>
       </div>
 

@@ -300,42 +300,70 @@
   // ---------- LLM call: main judgment ----------
 
   const SYSTEM_PROMPT = [
-    'You are a dead-pan 1950s court clerk with a faint contempt for everyone.',
-    'You fill in the flavor text AND assess base damages for a mock small-claims court judgment.',
-    'You do NOT speak to the user. You do NOT ask follow-up questions.',
-    'You do NOT say "here is" or "sure!" — you return JSON only.',
-    'Every finding must quote or directly reference the plaintiff\'s stated grievance text verbatim (or a short verbatim slice of it).',
-    'Findings are formal, clipped, faintly contemptuous. No exclamation marks. No modern slang.',
-    'The awarded total on this court is ALWAYS strictly less than $20 — the whole premise of the court is that it only hears pathetically small grievances.',
-    'Base damages must be STRICTLY LESS than $3.00 and greater than $0.25 — small, petty, specific, often with odd cents. The client applies the aggravator multiplier (capped at ×1.99) and adds any user-selected line items, all staying under the $20 ceiling.',
-    'Do NOT invent additional damage line items. The plaintiff picks their own itemized damages from separate chips. You only assess the base.',
-    'Return strict JSON matching this schema:',
+    'ROLE: You are a dead-pan 1950s small-claims court clerk with faint contempt for all parties. You return JSON. You do NOT talk to the user, do NOT say "sure" or "here is", do NOT add commentary.',
+    '',
+    'CONTEXT: This is a satirical mock-court whose awarded total is ALWAYS strictly less than $20. Grievances are petty by design (labeled leftovers, unreturned pens, loud chewing, bad roommate behavior, missed texts, etc). The humor comes from treating a dumb domestic crime with full courtroom gravity.',
+    '',
+    'OUTPUT FIELDS:',
+    '  case_number   — string format "26-04-XXXX" (4 digits).',
+    '  county        — whimsical fictional county, e.g. "Circuit Court of West Haversack County". Pick something that fits the grievance\'s vibe; avoid real place names.',
+    '  findings      — EXACTLY 3 formal findings, clipped and contemptuous. Each finding MUST reference something concrete from the plaintiff\'s grievance (an object, action, place, pattern) OR the listed aggravators — never a generic platitude. Each finding should feel like something a real (if snide) clerk would write. Max ~32 words each.',
+    '  verdict_archetype — MUST be exactly one of the allowed values below, chosen to flatter the plaintiff (this court always sides with plaintiffs).',
+    '  base_damages  — a number strictly less than 3.00 and greater than 0.25, with ODD CENTS (e.g. 1.73, 2.19, 0.87). This is the clerk-assessed base only; the client applies the aggravator multiplier and adds user-chosen line items separately.',
+    '',
+    'HARD RULES:',
+    '  - Do NOT invent additional damage line items. The plaintiff picks their own itemized damages separately. You ONLY assess the base number.',
+    '  - Do NOT propose settlements, suggest mediation, or be evenhanded — the whole bit is that the court is absurdly pro-plaintiff.',
+    '  - Do NOT use modern slang, exclamation marks, emojis, or pop-culture references. Register is 1950s civil-procedure with minor sarcasm.',
+    '  - Every finding must feel hand-fitted to THIS grievance. Quote or paraphrase a concrete detail from it. If the grievance mentions "my Stanley cup", the finding should mention the Stanley cup (or at least "the vessel"). Generic findings like "the plaintiff has been wronged" are forbidden.',
+    '  - No fabricated facts that contradict the grievance. Stay within what the plaintiff wrote.',
+    '',
+    'EXAMPLE INPUT →',
+    '  Plaintiff: Jordan P. Reeves',
+    '  Defendant: my roommate Dan',
+    '  Grievance: "ate my clearly labeled pad thai at 2am, denied it the next morning"',
+    '  Aggravators on record: it was labeled, they denied it (×1.38 combined)',
+    '',
+    'EXAMPLE OUTPUT →',
     '{',
-    '  "case_number": string,           // format "26-04-XXXX" (4 digits)',
-    '  "county": string,                // e.g. "Circuit Court of West Haversack County"',
-    '  "findings": [string, string, string],  // exactly 3',
-    '  "verdict_archetype": string,     // MUST be one of the 8 allowed archetypes',
-    '  "base_damages": number           // STRICTLY less than 3.00, greater than 0.25',
+    '  "case_number": "26-04-2917",',
+    '  "county": "Circuit Court of Muttontown County",',
+    '  "findings": [',
+    '    "The court finds it uncontested that a labeled pad thai was consumed by the defendant Dan at or about 2:00 a.m., in defiance of the handwritten label.",',
+    '    "The defendant\'s morning denial — in the continued presence of the empty container — is taken by this court as an aggravating circumstance, not a defense.",',
+    '    "The plaintiff Reeves appeared in good faith; the defendant has offered no plausible alternative eater."',
+    '  ],',
+    '  "verdict_archetype": "Ruled In Your Favor, With Pettiness",',
+    '  "base_damages": 2.17',
     '}',
+    '',
     'Allowed verdict_archetype values (pick exactly one):',
-    VERDICTS.map((v) => '  - ' + v).join('\n')
+    VERDICTS.map((v) => '  - ' + v).join('\n'),
+    '',
+    'Return ONLY the JSON object. No preface. No trailing prose.'
   ].join('\n');
 
   async function callLLM(ctx) {
+    const itemsContext = (ctx.items && ctx.items.length)
+      ? ('Plaintiff-selected line items (context only — you do NOT assess these): ' +
+         selectedItemLines(ctx.items).map((l) => l.label + ' ' + fmt$(l.amount)).join('; '))
+      : 'Plaintiff-selected line items: (none)';
+
     const userPrompt = [
       'Plaintiff: ' + ctx.plaintiff,
       'Defendant: ' + ctx.defendant,
       'Grievance: "' + ctx.grievance + '"',
       'Aggravating factors on record: ' + ctx.aggName + ' (combined multiplier ×' + ctx.aggMult.toFixed(2) + ')',
+      itemsContext,
       '',
-      'Fill in the judgment flavor AND assess base damages (under $10) as strict JSON. Do NOT add extra damage line items.'
+      'Produce the judgment JSON. Every finding must name a concrete detail from the grievance above (or an aggravator). Do NOT add damage line items — only assess base_damages (0.25..2.99, odd cents).'
     ].join('\n');
 
     const body = {
       slug: SLUG,
       model: 'gpt-5.4',
-      temperature: 0.4,
-      max_tokens: 500,
+      temperature: 0.55,
+      max_tokens: 700,
       response_format: 'json_object',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -776,13 +804,17 @@
     if (isSender) {
       const note = document.createElement('div');
       note.className = 'paid-note';
-      note.innerHTML = 'Share this URL with the defendant. When they mark the claim paid, they\'ll hand you a short receipt URL — opening that URL once will stamp <strong>PAID</strong> on your case permanently on this device.';
+      note.innerHTML = 'Tap <strong>SERVE THE DEFENDANT</strong> above and send the notice to the person who owes you. When they mark it paid, they\'ll hand you back a short receipt URL — opening that URL once stamps <strong>PAID</strong> on your case permanently on this device.';
       paidSection.appendChild(note);
       return;
     }
 
     const wrap = document.createElement('div');
     wrap.className = 'paid-receiver';
+    const served = document.createElement('div');
+    served.className = 'served-banner';
+    served.innerHTML = '<strong>You have been served.</strong> The plaintiff has asked you to settle this claim. When you\'re ready, mark it paid below and return the receipt URL to them as proof.';
+    wrap.appendChild(served);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mark-paid-btn';
@@ -790,7 +822,7 @@
     wrap.appendChild(btn);
     const hint = document.createElement('p');
     hint.className = 'paid-hint';
-    hint.textContent = 'Defendants only. Marking paid generates a short receipt URL you send back to the plaintiff as proof.';
+    hint.textContent = 'Defendants only. Marking paid generates a short receipt URL you send back to the plaintiff as proof of payment.';
     wrap.appendChild(hint);
 
     const receiptBox = document.createElement('div');
@@ -906,34 +938,49 @@
   // palette to pick from on the intake form.
 
   const SUGGEST_SYSTEM_PROMPT = [
-    'You are a world-class comedy writer impersonating a dead-pan 1950s court clerk.',
-    'This court only hears PATHETICALLY SMALL grievances — the final awarded total is always strictly less than $20.',
-    'You help a plaintiff shape a mock small-claims filing by drafting TWO small chip palettes:',
+    'ROLE: World-class comedy writer ghost-writing as a dead-pan 1950s small-claims court clerk.',
+    'This court only hears PATHETICALLY SMALL grievances — the final awarded total is always strictly less than $20. Dial everything down to the smallest possible scale: missing pens, loud chewing, labeled leftovers, missed texts, socks left in the dryer.',
+    '',
+    'TASK: Given one specific grievance, draft TWO small chip palettes the plaintiff can pick from:',
     '  (A) Aggravating-factor chips — conditions that slightly multiply the base damages.',
-    '  (B) Itemized-damage chips — specific absurd sub-five-dollar line-items the plaintiff can choose to include.',
-    'The plaintiff selects WHICH of each they want on record. You do not add anything automatically.',
-    'You do NOT speak to the user. You do NOT ask follow-up questions. Return strict JSON only.',
+    '  (B) Itemized-damage chips — sub-$5 line items the plaintiff may choose to include.',
     '',
-    'HARD requirements for aggravator chips:',
-    '  - 4 chips. 2 to 6 words each. No trailing period. No quotes.',
-    '  - Register: "it was labeled" / "on my birthday" / "third offense" / "in front of guests" / "after I warned them".',
-    '  - Each chip SPECIFICALLY tailored to THIS grievance — reference a concrete detail, witness, timing, or pattern it implies.',
-    '  - Funny, petty, specific. Avoid cliché (no "adds insult to injury", no "salt in the wound").',
-    '  - Multiplier 1.05 to 1.45, two decimals. Small things ~1.05-1.15; genuinely aggravating ~1.30-1.45. NEVER above 1.45.',
+    'TONE: Dry, formal, specific, faintly contemptuous. No exclamation marks, no pop-culture references, no modern slang, no clichés ("last straw", "salt in the wound", "adds insult to injury" are BANNED).',
     '',
-    'HARD requirements for itemized-damage chips:',
-    '  - 4 chips. Each is a short comedic line-item label (2 to 5 words) plus a dollar amount.',
-    '  - Each tailored to THIS grievance — reference the specific situation, object, or injury.',
-    '  - Label examples: "Tupperware depreciation", "groupchat reputational harm", "eye-roll servicing", "sidewalk glare tax".',
-    '  - Amount 0.25 to 3.99, two decimals, petty and specific (odd cents encouraged). NEVER above 3.99.',
-    '  - No trailing period. No quotes in labels.',
+    'HARD requirements for AGGRAVATOR chips:',
+    '  - Exactly 4. 2–6 words each. No trailing period. No quotes in labels.',
+    '  - Each SPECIFICALLY tailored to THIS grievance — reference a concrete detail, timing, witness, repetition pattern, or object that appears in the grievance. Generic chips ("it was rude") are rejected.',
+    '  - Register examples: "it was labeled", "on my birthday", "third offense this month", "in front of houseguests", "after I warned them", "during finals week".',
+    '  - Multiplier 1.05..1.45, two decimals. Small slights ~1.05–1.15. Genuinely aggravating ~1.30–1.45. NEVER above 1.45. Spread the multipliers across that range — do not cluster them.',
     '',
-    'Return strict JSON:',
+    'HARD requirements for ITEMIZED-DAMAGE chips:',
+    '  - Exactly 4. Each a short comedic label (2–5 words) plus a dollar amount.',
+    '  - Label must name a specific object or harm from THIS grievance (not generic "emotional damage"). Odd, specific, civil-procedural register.',
+    '  - Label examples: "Tupperware depreciation", "groupchat reputational harm", "pen-return freight", "overheard-apology tax", "laundromat quarter reimbursement".',
+    '  - Amount 0.25..3.99, two decimals, odd cents encouraged. Spread amounts across the range. NEVER above 3.99.',
+    '',
+    'EXAMPLE INPUT → Grievance: "my roommate keeps using my shampoo and then gaslights me about it"',
+    'EXAMPLE OUTPUT →',
+    '{',
+    '  "aggravators": [',
+    '    {"label": "bottle was labeled", "mult": 1.15},',
+    '    {"label": "denied to my face", "mult": 1.35},',
+    '    {"label": "third time this month", "mult": 1.40},',
+    '    {"label": "used the last of it", "mult": 1.45}',
+    '  ],',
+    '  "items": [',
+    '    {"label": "shampoo depreciation", "amount": 2.37},',
+    '    {"label": "gaslight hazard pay", "amount": 3.19},',
+    '    {"label": "bathroom reentry fee", "amount": 0.83},',
+    '    {"label": "replacement label printing", "amount": 1.05}',
+    '  ]',
+    '}',
+    '',
+    'Return strict JSON (no commentary, no preface):',
     '{',
     '  "aggravators": [ {"label": string, "mult": number}, ... exactly 4 ],',
     '  "items":       [ {"label": string, "amount": number}, ... exactly 4 ]',
-    '}',
-    'No commentary. No preface. JSON only.'
+    '}'
   ].join('\n');
 
   async function callSuggestLLM(plaintiff, defendant, grievance) {
@@ -948,8 +995,8 @@
     const body = {
       slug: SLUG,
       model: 'gpt-5.4',
-      temperature: 0.55,
-      max_tokens: 700,
+      temperature: 0.7,
+      max_tokens: 800,
       response_format: 'json_object',
       messages: [
         { role: 'system', content: SUGGEST_SYSTEM_PROMPT },
@@ -1191,6 +1238,70 @@
     });
   }
 
+  // ---------- Progressive disclosure (step 1 → step 2) ----------
+
+  const step1El = document.getElementById('step-1');
+  const step2El = document.getElementById('step-2');
+  const continueBtn = document.getElementById('continue-btn');
+  const backBtn = document.getElementById('back-btn');
+  const plaintiffEl = $('#plaintiff');
+  const defendantEl = $('#defendant');
+
+  function step1Ready() {
+    return (plaintiffEl.value.trim().length >= 2) &&
+           (defendantEl.value.trim().length >= 1) &&
+           (grievanceEl.value.trim().length >= 6);
+  }
+
+  function refreshContinueState() {
+    if (!continueBtn) return;
+    continueBtn.disabled = !step1Ready();
+  }
+
+  function goToStep(n) {
+    if (!step1El || !step2El) return;
+    if (n === 2) {
+      step1El.classList.remove('step-active');
+      step1El.classList.add('step-hidden');
+      step1El.setAttribute('aria-hidden', 'true');
+      step2El.classList.remove('step-hidden');
+      step2El.classList.add('step-active');
+      step2El.setAttribute('aria-hidden', 'false');
+      window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+    } else {
+      step2El.classList.remove('step-active');
+      step2El.classList.add('step-hidden');
+      step2El.setAttribute('aria-hidden', 'true');
+      step1El.classList.remove('step-hidden');
+      step1El.classList.add('step-active');
+      step1El.setAttribute('aria-hidden', 'false');
+      window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+    }
+  }
+
+  [plaintiffEl, defendantEl, grievanceEl].forEach((el) => {
+    if (!el) return;
+    el.addEventListener('input', refreshContinueState);
+    el.addEventListener('change', refreshContinueState);
+  });
+  refreshContinueState();
+
+  if (continueBtn) {
+    continueBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!step1Ready()) return;
+      goToStep(2);
+      // Kick off tailored-chip suggest in the background once user lands on step 2.
+      runSuggest(false);
+    });
+  }
+  if (backBtn) {
+    backBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      goToStep(1);
+    });
+  }
+
   // ---------- Form submit ----------
 
   form.addEventListener('submit', async (e) => {
@@ -1204,12 +1315,8 @@
     if (!plaintiff)  return setErr('The clerk needs a plaintiff name, please.');
     if (!defendant)  return setErr('A case needs a defendant — any name will do.');
     if (!grievance)  return setErr('State your grievance, however small.');
-    // Aggravators & items are BOTH optional — the judgment always has at least
-    // the base damages line, so the user can file a minimal case if they want.
-    // But we nudge toward at least one selection so the result isn't bare.
-    if (!selectedAggs.length && !selectedItems.length) {
-      return setErr('Pick at least one aggravator OR itemized damage to put on record.');
-    }
+    // Aggravators & items are BOTH optional. The user can file a minimal case
+    // with just the base damages if they want — that's fine.
 
     const ctx = buildContext({
       plaintiff, defendant, grievance,
@@ -1262,6 +1369,8 @@
     closeCustomEditor();
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
+    goToStep(1);
+    refreshContinueState();
     show(intake);
   });
 
@@ -1298,21 +1407,83 @@
     });
   }
 
-  // ---------- Share (exposed to onclick) ----------
+  // ---------- Serve the defendant (collection-letter style share) ----------
+  //
+  // Instead of a generic "share this judgment" meant for friends, the share
+  // payload is framed as an official notice FROM the plaintiff TO the defendant,
+  // demanding payment of the awarded total. The plaintiff forwards this text
+  // directly to the person who owes them (text message, DM, email).
+  //
+  // We read the current context + total off the DOM so this stays in sync with
+  // whatever was rendered (including any itemized scaling for the $20 cap).
 
-  window.share = function () {
-    const title = document.title;
+  function currentCaseText() {
+    const doc = document.getElementById('judgment-doc');
+    const totalEl = doc && doc.querySelector('.damages-table tr.total td.amt');
+    const caseEl = doc && doc.querySelector('.case-stamp');
+    const plaintiffName = ($('#plaintiff').value || '').trim() || 'the plaintiff';
+    const defendantName = ($('#defendant').value || '').trim() || 'you';
+    const grievanceText = ($('#grievance').value || '').trim() || 'the matter on record';
+    const total = totalEl ? totalEl.textContent.trim() : '$0.00';
+    const docket = caseEl ? caseEl.textContent.trim().replace(/^CASE\s+/i, '') : '';
+    return { plaintiffName, defendantName, grievanceText, total, docket };
+  }
+
+  function buildDemandLetter() {
+    const c = currentCaseText();
     const url = location.href;
+    const lines = [
+      c.defendantName + ',',
+      '',
+      'You have been served.',
+      '',
+      'In the matter of "' + c.grievanceText + '", the Circuit Court of Honest Grievances has ruled in favor of ' + c.plaintiffName + '.',
+      'Awarded total: ' + c.total + (c.docket ? ' (docket ' + c.docket + ')' : '') + '.',
+      '',
+      'Remit payment at your earliest convenience. Mark the claim paid at the link below and return the receipt URL to ' + c.plaintiffName + ' as proof.',
+      '',
+      url
+    ];
+    return lines.join('\n');
+  }
+
+  function buildDemandTitle() {
+    const c = currentCaseText();
+    return 'You have been served — ' + c.plaintiffName + ' v. ' + c.defendantName;
+  }
+
+  window.serveDefendant = function () {
+    const title = buildDemandTitle();
+    const text = buildDemandLetter();
+    const url = location.href;
+
     if (navigator.share) {
-      navigator.share({ title, url }).catch(() => {});
-    } else if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url)
-        .then(() => alert('Link copied! Paste it anywhere — your judgment loads instantly.'))
-        .catch(() => alert(url));
+      navigator.share({ title: title, text: text, url: url }).catch(() => {});
+      return;
+    }
+
+    const toCopy = text; // text already contains the URL
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(toCopy)
+        .then(() => {
+          const btn = document.getElementById('serve-btn');
+          if (btn) {
+            const prev = btn.textContent;
+            btn.textContent = 'COPIED — NOW PASTE TO DEFENDANT';
+            setTimeout(() => { btn.textContent = prev; }, 2400);
+          } else {
+            alert('Demand copied — paste it to the defendant.');
+          }
+        })
+        .catch(() => { window.prompt('Copy this demand and send it to the defendant:', toCopy); });
     } else {
-      alert(url);
+      window.prompt('Copy this demand and send it to the defendant:', toCopy);
     }
   };
+
+  // Back-compat: some older hash fragments or cached scripts may still call
+  // window.share(). Route it to the new serve flow.
+  window.share = function () { window.serveDefendant(); };
 
   // ---------- Boot: hydrate from #fragment if present ----------
 
