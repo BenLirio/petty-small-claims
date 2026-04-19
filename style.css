@@ -536,6 +536,42 @@ textarea::placeholder {
   font-size: 16px;
 }
 
+/* ---------- Dramatic reveal for awarded total ---------- */
+
+.damages-table tr.total td.amt {
+  font-family: 'Playfair Display', serif;
+  font-weight: 900;
+  font-size: clamp(22px, 6vw, 30px);
+  color: var(--stamp-red);
+  letter-spacing: 0.02em;
+}
+
+.damages-table tr.total td.amt .reveal-amt {
+  display: inline-block;
+  animation: total-thump 0.55s cubic-bezier(.16, 1.2, .3, 1) both;
+  transform-origin: right center;
+}
+
+@keyframes total-thump {
+  0%   { transform: scale(0.4); opacity: 0; filter: blur(4px); }
+  55%  { transform: scale(1.18); opacity: 1; filter: blur(0); }
+  80%  { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}
+
+/* Line-item amounts fade in one after the other so the column "fills in"
+   before the total slams down. */
+.damages-table tbody tr td.amt .reveal-amt {
+  display: inline-block;
+  opacity: 0;
+  animation: amt-fade 0.32s ease-out forwards;
+}
+
+@keyframes amt-fade {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .foot-math {
   font-family: 'Special Elite', monospace;
   font-size: 11px;

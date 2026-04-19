@@ -67,7 +67,7 @@
           </div>
 
           <div class="form-row">
-            <label class="chip-label">Petty damages <span class="label-hint">(sub-$5 line items)</span></label>
+            <label class="chip-label">Petty damages <span class="label-hint">(check any that fit)</span></label>
             <div id="item-chips" class="chips" role="group" aria-label="Itemized damages">
               <!-- Rendered by JS -->
             </div>
@@ -76,11 +76,9 @@
               <div id="custom-item-editor" class="custom-item-editor hidden">
                 <input id="custom-item-label" type="text" maxlength="42" placeholder="e.g. ruined my morning" aria-label="Custom line-item label">
                 <div class="custom-item-amt-row">
-                  <span class="custom-dollar">$</span>
-                  <input id="custom-item-amount" type="number" step="0.01" min="0.25" max="4.99" placeholder="1.50" aria-label="Custom line-item amount">
-                  <button id="custom-item-add" type="button" class="custom-item-add">ADD</button>
+                  <button id="custom-item-add" type="button" class="custom-item-add">ADD TO RECORD</button>
                 </div>
-                <p class="custom-item-hint">Max $4.99 — this court only hears petty matters.</p>
+                <p class="custom-item-hint">The clerk will assess the amount. You just describe the harm.</p>
               </div>
             </div>
             <div id="item-summary" class="agg-summary" aria-live="polite"></div>
@@ -90,7 +88,7 @@
 
           <button id="file-btn" type="submit" class="file-btn">FILE THE CASE</button>
           <button id="back-btn" type="button" class="back-btn">← back</button>
-          <p class="disclaimer">Not a real court. No legal advice. Not even close. Total is always under $20 — pettiness is the point.</p>
+          <p class="disclaimer">Not a real court. No legal advice. Not even close. The clerk assesses all amounts — the award is revealed only in the final judgment.</p>
         </div>
       </form>
     </section>

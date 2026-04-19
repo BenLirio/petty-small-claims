@@ -152,10 +152,8 @@
       aggSummary.textContent = '';
       return;
     }
-    const mult = combinedMultiplier(selectedAggs);
     const label = selectedAggs.length === 1 ? '1 factor' : (selectedAggs.length + ' factors');
-    const capNote = mult >= MAX_COMBINED_MULT - 0.001 ? ' (capped)' : '';
-    aggSummary.textContent = label + ' on record — combined multiplier ×' + mult.toFixed(2) + capNote;
+    aggSummary.textContent = label + ' on record.';
   }
 
   function updateItemSummary() {
@@ -164,12 +162,8 @@
       itemSummary.textContent = '';
       return;
     }
-    const sum = selectedItems.reduce((s, k) => {
-      const def = CURRENT_ITEM[k] || ITEM[k];
-      return s + (def ? Number(def.amount) || 0 : 0);
-    }, 0);
     const label = selectedItems.length === 1 ? '1 line item' : (selectedItems.length + ' line items');
-    itemSummary.textContent = label + ' selected — subtotal ' + fmt$(sum);
+    itemSummary.textContent = label + ' selected.';
   }
 
   // ---------- Hash / RNG ----------
@@ -477,9 +471,6 @@
   function renderJudgment(ctx, payload) {
     const base = Number(payload.base_damages) || 0;
     let baseAwarded = round2(base * ctx.aggMult);
-    const aggPart = ctx.aggs.length
-      ? `assessed base damages × ${ctx.aggMult.toFixed(2)} (${ctx.aggName})`
-      : `assessed base damages (no aggravators on record)`;
 
     // Only user-selected itemized damages — no surprise additions.
     let itemLines = selectedItemLines(ctx.items || []);
@@ -499,8 +490,11 @@
         amount: round2((Number(l.amount) || 0) * scale)
       }));
     }
+    const baseLabel = ctx.aggs.length
+      ? 'base damages (including aggravating factors)'
+      : 'base damages';
     const baseLine = {
-      label: `base damages — ${aggPart}`,
+      label: baseLabel,
       amount: baseAwarded
     };
     const lines = [baseLine, ...itemLines];
@@ -511,7 +505,7 @@
 
     const aggSectionHtml = ctx.aggs.length ? `
       <div class="section-hd">Aggravating Factors On Record</div>
-      <div class="agg-line">${escapeHtml(ctx.aggName)} <span class="mult">(combined multiplier: ×${ctx.aggMult.toFixed(2)})</span></div>
+      <div class="agg-line">${escapeHtml(ctx.aggName)}.</div>
     ` : `
       <div class="section-hd">Aggravating Factors On Record</div>
       <div class="agg-line"><em>none selected by the plaintiff.</em></div>
@@ -550,18 +544,18 @@
       <div class="section-hd">Awarded Damages</div>
       <table class="damages-table">
         <tbody>
-          ${lines.map((l) => `
+          ${lines.map((l, i) => `
             <tr>
               <td>${escapeHtml(l.label)}</td>
-              <td class="amt">${fmt$(l.amount)}</td>
+              <td class="amt"><span class="reveal-amt" style="animation-delay:${(i * 0.18).toFixed(2)}s">${fmt$(l.amount)}</span></td>
             </tr>`).join('')}
           <tr class="total">
             <td>AWARDED TOTAL</td>
-            <td class="amt">${fmt$(total)}</td>
+            <td class="amt"><span class="reveal-amt" style="animation-delay:${(lines.length * 0.18 + 0.25).toFixed(2)}s">${fmt$(total)}</span></td>
           </tr>
         </tbody>
       </table>
-      <div class="foot-math">Base = clerk-assessed ${fmt$(base)} × ${ctx.aggMult.toFixed(2)} = ${fmt$(baseAwarded)}${itemLines.length ? ' · ' + itemLines.length + ' line item' + (itemLines.length === 1 ? '' : 's') + ' selected by the plaintiff' : ' · no itemized damages selected'}</div>
+      <div class="foot-math">${itemLines.length ? itemLines.length + ' line item' + (itemLines.length === 1 ? '' : 's') + ' on record · amounts assessed by the clerk' : 'amounts assessed by the clerk'}</div>
 
       <div class="verdict-block">
         <div class="verdict-label">Verdict of the Court</div>
@@ -1066,7 +1060,7 @@
       btn.setAttribute('aria-checked', 'false');
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
-      btn.textContent = a.label + '  ×' + a.mult.toFixed(2);
+      btn.textContent = a.label; // no multiplier on intake — revealed only in judgment
       aggChipsEl.appendChild(btn);
     });
     CURRENT_AGG = newCurrent;
@@ -1090,7 +1084,7 @@
       btn.setAttribute('aria-checked', 'false');
       btn.dataset.key = key;
       btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      btn.textContent = a.label; // no dollar on intake — revealed only in judgment
       itemChipsEl.appendChild(btn);
     });
     CURRENT_ITEM = newCurrent;
@@ -1153,8 +1147,18 @@
   const customToggle = document.getElementById('custom-item-toggle');
   const customEditor = document.getElementById('custom-item-editor');
   const customLabelEl = document.getElementById('custom-item-label');
-  const customAmtEl = document.getElementById('custom-item-amount');
+  const customAmtEl = document.getElementById('custom-item-amount'); // may be null after redesign
   const customAddBtn = document.getElementById('custom-item-add');
+
+  // Derive a petty dollar amount (0.25..4.99) deterministically from the label
+  // text so the user never has to assign it themselves. Same label -> same
+  // amount, keeping share URLs stable.
+  function assessCustomAmount(label) {
+    const h = hashStr(String(label || '').toLowerCase() + '|assess');
+    const rand = prng(h || 1);
+    const v = 0.25 + rand() * (MAX_CUSTOM_ITEM_AMT - 0.25); // 0.25..4.99
+    return round2(v);
+  }
 
   function openCustomEditor() {
     if (!customEditor) return;
@@ -1184,7 +1188,7 @@
       itemChipsEl.appendChild(existing);
     }
     existing.dataset.amount = String(def.amount);
-    existing.textContent = def.label + '  ' + fmt$(def.amount);
+    existing.textContent = def.label; // amount hidden — revealed only in judgment
     // Auto-select the just-added custom chip.
     existing.setAttribute('aria-checked', 'true');
     if (selectedItems.indexOf(CUSTOM_ITEM_KEY) < 0) selectedItems.push(CUSTOM_ITEM_KEY);
@@ -1201,35 +1205,26 @@
   }
 
   function handleCustomAdd() {
-    if (!customLabelEl || !customAmtEl) return;
+    if (!customLabelEl) return;
     const label = (customLabelEl.value || '').trim().replace(/["'\.]+$/g, '').slice(0, 42);
-    let amt = Number(customAmtEl.value);
     if (!label || label.length < 2) {
       customLabelEl.focus();
       return;
     }
-    if (!isFinite(amt) || amt <= 0) {
-      customAmtEl.focus();
-      return;
-    }
-    amt = Math.max(0.25, Math.min(MAX_CUSTOM_ITEM_AMT, amt));
-    amt = Math.round(amt * 100) / 100;
+    // The clerk (this function) decides the dollar amount — user never sees or
+    // enters one. Deterministic so share URLs reproduce the same award.
+    const amt = assessCustomAmount(label);
 
     CURRENT_ITEM[CUSTOM_ITEM_KEY] = { label: label, amount: amt };
     renderCustomChipIfPresent();
     closeCustomEditor();
-    // Leave values in the fields so the user can tweak + re-add if they want.
+    // Leave label in the field so the user can tweak + re-add if they want.
   }
 
   if (customAddBtn) {
     customAddBtn.addEventListener('click', (e) => {
       e.preventDefault();
       handleCustomAdd();
-    });
-  }
-  if (customAmtEl) {
-    customAmtEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); handleCustomAdd(); }
     });
   }
   if (customLabelEl) {
@@ -1402,7 +1397,7 @@
       btn.setAttribute('aria-checked', 'false');
       btn.dataset.key = key;
       btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      btn.textContent = a.label; // amount hidden — revealed only in judgment
       itemChipsEl.appendChild(btn);
     });
   }
@@ -1655,7 +1650,7 @@
       btn.setAttribute('aria-checked', 'true');
       btn.dataset.key = o.a;
       btn.dataset.mult = String(def.mult);
-      btn.textContent = def.label + '  ×' + Number(def.mult).toFixed(2);
+      btn.textContent = def.label; // multiplier hidden — revealed only in judgment
       aggChipsEl.appendChild(btn);
       selectedAggs = [o.a];
       updateAggSummary();
@@ -1714,7 +1709,7 @@
       btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
-      btn.textContent = a.label + '  ×' + Number(a.mult).toFixed(2);
+      btn.textContent = a.label; // multiplier hidden — revealed only in judgment
       aggChipsEl.appendChild(btn);
     });
   }
@@ -1732,7 +1727,7 @@
       btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
       btn.dataset.key = key;
       btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label + '  ' + fmt$(a.amount);
+      btn.textContent = a.label; // amount hidden — revealed only in judgment
       itemChipsEl.appendChild(btn);
     });
   }
