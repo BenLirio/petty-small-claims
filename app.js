@@ -4,14 +4,18 @@
 //   1. User enters plaintiff / defendant / grievance.
 //   2. Clerk (LLM) drafts tailored aggravator chips AND tailored itemized-damage chips.
 //      User picks any that apply from BOTH lists. Nothing is tacked on at the end.
-//   3. On file, LLM produces findings / verdict / base damages ONLY.
-//      Total = base damages × aggravator multiplier + sum(selected itemized damages).
-//   4. Local deterministic fallback kicks in on any LLM error.
-//   5. Serializes only case inputs + selected chip keys to the URL fragment.
-//   6. Paid-receipt flow unchanged.
+//   3. User may ALSO add one custom "other" line item (label + amount).
+//   4. On file, LLM produces findings / verdict / base damages ONLY.
+//      Total = base damages × aggravator multiplier + sum(selected itemized damages),
+//      guaranteed to land strictly under $20 — the pettiness is the point.
+//   5. Local deterministic fallback kicks in on any LLM error.
+//   6. Serializes only case inputs + selected chip keys (+ custom chip defs) to the URL fragment.
+//   7. Paid-receipt flow unchanged.
 //
 // Design rule: everything on the judgment must be something the user input or
-// explicitly selected. The clerk never invents surprise line items.
+// explicitly selected. The clerk never invents surprise line items. And the
+// total is ALWAYS under $20 — if math would push it over, line items are
+// scaled down proportionally before rendering.
 
 (function () {
   'use strict';
@@ -19,33 +23,36 @@
   const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
   const SLUG = 'petty-small-claims';
 
-  // Default aggravator multipliers (fallback + seed for AI-generated set)
+  // Hard ceiling — final awarded total is always STRICTLY LESS THAN this.
+  const AWARD_CAP = 20.00;
+
+  // Default aggravator multipliers (fallback + seed for AI-generated set).
+  // Kept small: combined cap is 1.99 so base × mult never breaks the $20 rule.
   const AGG = {
-    labeled:   { label: 'it was labeled',  mult: 1.20 },
-    denied:    { label: 'they denied it',  mult: 1.35 },
-    third:     { label: 'third offense',   mult: 1.50 },
-    pandemic:  { label: 'mid-pandemic',    mult: 1.15 },
-    birthday:  { label: 'on my birthday',  mult: 1.75 }
+    labeled:   { label: 'it was labeled',  mult: 1.15 },
+    denied:    { label: 'they denied it',  mult: 1.25 },
+    third:     { label: 'third offense',   mult: 1.35 },
+    birthday:  { label: 'on my birthday',  mult: 1.45 }
   };
 
   // Default itemized-damage chips (fallback + seed for AI-generated set).
   // User picks which apply — these are NOT auto-added to the judgment.
+  // Amounts are petty on purpose: sub-$5 each.
   const ITEM = {
-    tupperware:  { label: 'Tupperware depreciation',   amount: 4.50 },
-    emotional:   { label: 'emotional distress',        amount: 12.00 },
-    spite:       { label: 'interest on spite',         amount: 3.14 },
-    procedural:  { label: 'procedural inconvenience',  amount: 8.88 },
-    principle:   { label: 'principle of the thing',    amount: 1.99 },
-    eyeroll:     { label: 'eye-roll servicing',        amount: 6.25 },
-    groupchat:   { label: 'groupchat reputational harm', amount: 14.40 },
-    sigh:        { label: 'deep-sigh processing',      amount: 0.99 }
+    tupperware:  { label: 'Tupperware depreciation',     amount: 1.25 },
+    emotional:   { label: 'minor emotional distress',    amount: 2.49 },
+    spite:       { label: 'interest on spite',           amount: 0.77 },
+    eyeroll:     { label: 'eye-roll servicing',          amount: 1.50 },
+    principle:   { label: 'principle of the thing',      amount: 1.99 }
   };
 
   // Current live sets — may be replaced by AI-generated alternates tailored to grievance.
   let CURRENT_AGG = Object.assign({}, AGG);
   let CURRENT_ITEM = Object.assign({}, ITEM);
 
-  const MAX_COMBINED_MULT = 2.50;
+  const MAX_COMBINED_MULT = 1.99;
+  const CUSTOM_ITEM_KEY = 'custom-other';
+  const MAX_CUSTOM_ITEM_AMT = 4.99;
 
   // 8 verdict archetypes (ALL flattering to the plaintiff)
   const VERDICTS = [
@@ -230,10 +237,12 @@
     return '$' + round2(n).toFixed(2);
   }
 
-  // Deterministic fallback base damages (< $10), seeded by grievance text.
+  // Deterministic fallback base damages (strictly < $3.00, > $0.10),
+  // seeded by grievance text. Keeps the base tiny so the final total —
+  // base × mult + itemized — always lands comfortably under $20.
   function fallbackBaseDamages(grievance) {
     const rand = prng(hashStr((grievance || 'nothing') + '|base') || 1);
-    const v = 1.25 + rand() * 8.5;
+    const v = 0.25 + rand() * 2.5; // 0.25 .. 2.75
     return round2(v);
   }
 
@@ -297,7 +306,8 @@
     'You do NOT say "here is" or "sure!" — you return JSON only.',
     'Every finding must quote or directly reference the plaintiff\'s stated grievance text verbatim (or a short verbatim slice of it).',
     'Findings are formal, clipped, faintly contemptuous. No exclamation marks. No modern slang.',
-    'Base damages must be STRICTLY LESS than $10.00 and greater than $0.25 — small, petty, specific. The client applies the aggravator multiplier.',
+    'The awarded total on this court is ALWAYS strictly less than $20 — the whole premise of the court is that it only hears pathetically small grievances.',
+    'Base damages must be STRICTLY LESS than $3.00 and greater than $0.25 — small, petty, specific, often with odd cents. The client applies the aggravator multiplier (capped at ×1.99) and adds any user-selected line items, all staying under the $20 ceiling.',
     'Do NOT invent additional damage line items. The plaintiff picks their own itemized damages from separate chips. You only assess the base.',
     'Return strict JSON matching this schema:',
     '{',
@@ -305,7 +315,7 @@
     '  "county": string,                // e.g. "Circuit Court of West Haversack County"',
     '  "findings": [string, string, string],  // exactly 3',
     '  "verdict_archetype": string,     // MUST be one of the 8 allowed archetypes',
-    '  "base_damages": number           // STRICTLY less than 10.00, greater than 0.25',
+    '  "base_damages": number           // STRICTLY less than 3.00, greater than 0.25',
     '}',
     'Allowed verdict_archetype values (pick exactly one):',
     VERDICTS.map((v) => '  - ' + v).join('\n')
@@ -365,7 +375,7 @@
 
     let base = Number(parsed.base_damages);
     if (!isFinite(base) || base <= 0) base = fallbackBaseDamages(ctx.grievance);
-    if (base >= 10) base = 9.99;
+    if (base >= 3) base = 2.99;
     if (base < 0.25) base = 0.25;
     parsed.base_damages = round2(base);
 
@@ -438,19 +448,36 @@
 
   function renderJudgment(ctx, payload) {
     const base = Number(payload.base_damages) || 0;
-    const baseAwarded = round2(base * ctx.aggMult);
+    let baseAwarded = round2(base * ctx.aggMult);
     const aggPart = ctx.aggs.length
       ? `assessed base damages × ${ctx.aggMult.toFixed(2)} (${ctx.aggName})`
       : `assessed base damages (no aggravators on record)`;
+
+    // Only user-selected itemized damages — no surprise additions.
+    let itemLines = selectedItemLines(ctx.items || []);
+
+    // HARD cap: total must be strictly less than $20. If base × mult + items
+    // threatens that, scale ONLY the itemized line items down proportionally
+    // so the clerk's assessed base survives intact. If even the bare base is
+    // over the ceiling (shouldn't happen given our clamps), trim the base too.
+    const ceiling = round2(AWARD_CAP - 0.01); // 19.99
+    if (baseAwarded > ceiling) baseAwarded = ceiling;
+    let rawItemSum = itemLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    const roomForItems = round2(ceiling - baseAwarded);
+    if (rawItemSum > roomForItems && rawItemSum > 0) {
+      const scale = roomForItems / rawItemSum;
+      itemLines = itemLines.map((l) => ({
+        label: l.label,
+        amount: round2((Number(l.amount) || 0) * scale)
+      }));
+    }
     const baseLine = {
       label: `base damages — ${aggPart}`,
       amount: baseAwarded
     };
-
-    // Only user-selected itemized damages — no surprise additions.
-    const itemLines = selectedItemLines(ctx.items || []);
     const lines = [baseLine, ...itemLines];
-    const total = round2(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0));
+    let total = round2(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0));
+    if (total >= AWARD_CAP) total = ceiling; // paranoia pass for fp rounding
 
     const countyUpper = payload.county.toUpperCase();
 
@@ -880,30 +907,31 @@
 
   const SUGGEST_SYSTEM_PROMPT = [
     'You are a world-class comedy writer impersonating a dead-pan 1950s court clerk.',
-    'You help a plaintiff shape a mock small-claims filing by drafting TWO chip palettes:',
-    '  (A) Aggravating-factor chips — conditions that multiply the base damages.',
-    '  (B) Itemized-damage chips — specific absurd line-items the plaintiff can choose to include.',
+    'This court only hears PATHETICALLY SMALL grievances — the final awarded total is always strictly less than $20.',
+    'You help a plaintiff shape a mock small-claims filing by drafting TWO small chip palettes:',
+    '  (A) Aggravating-factor chips — conditions that slightly multiply the base damages.',
+    '  (B) Itemized-damage chips — specific absurd sub-five-dollar line-items the plaintiff can choose to include.',
     'The plaintiff selects WHICH of each they want on record. You do not add anything automatically.',
     'You do NOT speak to the user. You do NOT ask follow-up questions. Return strict JSON only.',
     '',
     'HARD requirements for aggravator chips:',
-    '  - 6 chips. 2 to 6 words each. No trailing period. No quotes.',
+    '  - 4 chips. 2 to 6 words each. No trailing period. No quotes.',
     '  - Register: "it was labeled" / "on my birthday" / "third offense" / "in front of guests" / "after I warned them".',
     '  - Each chip SPECIFICALLY tailored to THIS grievance — reference a concrete detail, witness, timing, or pattern it implies.',
     '  - Funny, petty, specific. Avoid cliché (no "adds insult to injury", no "salt in the wound").',
-    '  - Multiplier 1.10 to 1.85, two decimals. Petty small things ~1.10-1.25; genuinely aggravating ~1.50-1.85.',
+    '  - Multiplier 1.05 to 1.45, two decimals. Small things ~1.05-1.15; genuinely aggravating ~1.30-1.45. NEVER above 1.45.',
     '',
     'HARD requirements for itemized-damage chips:',
-    '  - 6 chips. Each is a short comedic line-item label (2 to 5 words) plus a dollar amount.',
+    '  - 4 chips. Each is a short comedic line-item label (2 to 5 words) plus a dollar amount.',
     '  - Each tailored to THIS grievance — reference the specific situation, object, or injury.',
     '  - Label examples: "Tupperware depreciation", "groupchat reputational harm", "eye-roll servicing", "sidewalk glare tax".',
-    '  - Amount 0.50 to 25.00, two decimals, petty and specific (odd cents encouraged).',
+    '  - Amount 0.25 to 3.99, two decimals, petty and specific (odd cents encouraged). NEVER above 3.99.',
     '  - No trailing period. No quotes in labels.',
     '',
     'Return strict JSON:',
     '{',
-    '  "aggravators": [ {"label": string, "mult": number}, ... exactly 6 ],',
-    '  "items":       [ {"label": string, "amount": number}, ... exactly 6 ]',
+    '  "aggravators": [ {"label": string, "mult": number}, ... exactly 4 ],',
+    '  "items":       [ {"label": string, "amount": number}, ... exactly 4 ]',
     '}',
     'No commentary. No preface. JSON only.'
   ].join('\n');
@@ -944,27 +972,27 @@
     if (!Array.isArray(parsed.aggravators) || parsed.aggravators.length < 3) throw new Error('bad_aggs');
     if (!Array.isArray(parsed.items) || parsed.items.length < 3) throw new Error('bad_items');
 
-    const aggs = parsed.aggravators.slice(0, 6).map((a, i) => {
+    const aggs = parsed.aggravators.slice(0, 4).map((a, i) => {
       const label = String(a.label || ('factor ' + (i + 1))).replace(/["'\.]+$/g, '').slice(0, 48);
       let mult = Number(a.mult);
-      if (!isFinite(mult)) mult = 1.2;
-      mult = Math.max(1.05, Math.min(1.95, mult));
+      if (!isFinite(mult)) mult = 1.15;
+      mult = Math.max(1.05, Math.min(1.45, mult));
       mult = Math.round(mult * 100) / 100;
       return { label: label, mult: mult };
     });
     const aggFillers = Object.values(AGG);
-    while (aggs.length < 6) aggs.push(aggFillers[aggs.length % aggFillers.length]);
+    while (aggs.length < 4) aggs.push(aggFillers[aggs.length % aggFillers.length]);
 
-    const items = parsed.items.slice(0, 6).map((a, i) => {
+    const items = parsed.items.slice(0, 4).map((a, i) => {
       const label = String(a.label || ('line item ' + (i + 1))).replace(/["'\.]+$/g, '').slice(0, 56);
       let amount = Number(a.amount);
-      if (!isFinite(amount)) amount = 2.50;
-      amount = Math.max(0.25, Math.min(25.00, amount));
+      if (!isFinite(amount)) amount = 1.50;
+      amount = Math.max(0.25, Math.min(3.99, amount));
       amount = Math.round(amount * 100) / 100;
       return { label: label, amount: amount };
     });
     const itemFillers = Object.values(ITEM);
-    while (items.length < 6) items.push(itemFillers[items.length % itemFillers.length]);
+    while (items.length < 4) items.push(itemFillers[items.length % itemFillers.length]);
 
     return { aggravators: aggs, items: items };
   }
@@ -1001,6 +1029,8 @@
 
   function renderItemChips(itemSet) {
     if (!itemChipsEl) return;
+    // Preserve any user-added custom line item across re-suggests.
+    const preservedCustom = CURRENT_ITEM[CUSTOM_ITEM_KEY] || null;
     itemChipsEl.innerHTML = '';
     const newCurrent = {};
     itemSet.forEach((a, i) => {
@@ -1018,6 +1048,10 @@
     });
     CURRENT_ITEM = newCurrent;
     selectedItems = [];
+    if (preservedCustom) {
+      CURRENT_ITEM[CUSTOM_ITEM_KEY] = preservedCustom;
+      renderCustomChipIfPresent();
+    }
     updateItemSummary();
   }
 
@@ -1060,6 +1094,101 @@
   }
   if (suggestBtn) {
     suggestBtn.addEventListener('click', (e) => { e.preventDefault(); runSuggest(true); });
+  }
+
+  // ---------- Custom "other" line-item editor ----------
+  //
+  // User can add ONE custom sub-$5 line item. Uses a reserved key
+  // (CUSTOM_ITEM_KEY) in CURRENT_ITEM so existing encode / render / share
+  // flows pick it up with no schema change. Adding again replaces the prior
+  // custom item.
+
+  const customToggle = document.getElementById('custom-item-toggle');
+  const customEditor = document.getElementById('custom-item-editor');
+  const customLabelEl = document.getElementById('custom-item-label');
+  const customAmtEl = document.getElementById('custom-item-amount');
+  const customAddBtn = document.getElementById('custom-item-add');
+
+  function openCustomEditor() {
+    if (!customEditor) return;
+    customEditor.classList.remove('hidden');
+    if (customToggle) customToggle.setAttribute('aria-expanded', 'true');
+    if (customLabelEl) customLabelEl.focus();
+  }
+  function closeCustomEditor() {
+    if (!customEditor) return;
+    customEditor.classList.add('hidden');
+    if (customToggle) customToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderCustomChipIfPresent() {
+    if (!itemChipsEl) return;
+    if (!CURRENT_ITEM[CUSTOM_ITEM_KEY]) return;
+    // If a chip with that key already exists, replace its text; otherwise append.
+    let existing = itemChipsEl.querySelector('.chip[data-key="' + CUSTOM_ITEM_KEY + '"]');
+    const def = CURRENT_ITEM[CUSTOM_ITEM_KEY];
+    if (!existing) {
+      existing = document.createElement('button');
+      existing.type = 'button';
+      existing.className = 'chip';
+      existing.setAttribute('role', 'checkbox');
+      existing.setAttribute('aria-checked', 'false');
+      existing.dataset.key = CUSTOM_ITEM_KEY;
+      itemChipsEl.appendChild(existing);
+    }
+    existing.dataset.amount = String(def.amount);
+    existing.textContent = def.label + '  ' + fmt$(def.amount);
+    // Auto-select the just-added custom chip.
+    existing.setAttribute('aria-checked', 'true');
+    if (selectedItems.indexOf(CUSTOM_ITEM_KEY) < 0) selectedItems.push(CUSTOM_ITEM_KEY);
+    updateItemSummary();
+  }
+
+  if (customToggle) {
+    customToggle.setAttribute('aria-expanded', 'false');
+    customToggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (customEditor && customEditor.classList.contains('hidden')) openCustomEditor();
+      else closeCustomEditor();
+    });
+  }
+
+  function handleCustomAdd() {
+    if (!customLabelEl || !customAmtEl) return;
+    const label = (customLabelEl.value || '').trim().replace(/["'\.]+$/g, '').slice(0, 42);
+    let amt = Number(customAmtEl.value);
+    if (!label || label.length < 2) {
+      customLabelEl.focus();
+      return;
+    }
+    if (!isFinite(amt) || amt <= 0) {
+      customAmtEl.focus();
+      return;
+    }
+    amt = Math.max(0.25, Math.min(MAX_CUSTOM_ITEM_AMT, amt));
+    amt = Math.round(amt * 100) / 100;
+
+    CURRENT_ITEM[CUSTOM_ITEM_KEY] = { label: label, amount: amt };
+    renderCustomChipIfPresent();
+    closeCustomEditor();
+    // Leave values in the fields so the user can tweak + re-add if they want.
+  }
+
+  if (customAddBtn) {
+    customAddBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleCustomAdd();
+    });
+  }
+  if (customAmtEl) {
+    customAmtEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleCustomAdd(); }
+    });
+  }
+  if (customLabelEl) {
+    customLabelEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleCustomAdd(); }
+    });
   }
 
   // ---------- Form submit ----------
@@ -1128,6 +1257,9 @@
     updateAggSummary();
     updateItemSummary();
     errEl.textContent = '';
+    if (customLabelEl) customLabelEl.value = '';
+    if (customAmtEl) customAmtEl.value = '';
+    closeCustomEditor();
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
     show(intake);
