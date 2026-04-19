@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Petty Small Claims — File Your Grievance</title>
+  <meta property="og:title" content="Petty Small Claims">
+  <meta property="og:description" content="File your most absurd everyday grievance in small-claims court and receive an official typewritten judgment.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Special+Elite&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+  <script src="feedback.js" defer></script>
+</head>
+<body>
+  <main id="app">
+    <!-- Intake form screen -->
+    <section id="intake" class="screen">
+      <header class="masthead">
+        <div class="masthead-rule"></div>
+        <h1 class="masthead-title">PETTY SMALL CLAIMS</h1>
+        <p class="masthead-sub">Circuit Court of Honest Grievances — Intake Form 26-A</p>
+        <div class="masthead-rule"></div>
+      </header>
+
+      <form id="case-form" novalidate>
+        <div class="form-row">
+          <label for="plaintiff">1. Plaintiff (your full name)</label>
+          <input id="plaintiff" name="plaintiff" type="text" autocomplete="name" maxlength="60" placeholder="e.g. Jordan P. Reeves">
+        </div>
+
+        <div class="form-row">
+          <label for="defendant">2. Defendant</label>
+          <input id="defendant" name="defendant" type="text" maxlength="60" placeholder="my roommate / my cat / the USPS">
+        </div>
+
+        <div class="form-row">
+          <label for="grievance">3. Statement of grievance</label>
+          <textarea id="grievance" name="grievance" maxlength="280" rows="3" placeholder="ate my labeled leftovers"></textarea>
+        </div>
+
+        <div class="form-row">
+          <label for="damages">4. Damages claimed</label>
+          <input id="damages" name="damages" type="text" maxlength="60" placeholder="$47.12 and my dignity">
+        </div>
+
+        <div class="form-row">
+          <label class="chip-label">5. Aggravating factor on record</label>
+          <div id="aggravator-chips" class="chips" role="radiogroup" aria-label="Aggravating factor">
+            <button type="button" class="chip" role="radio" aria-checked="false" data-key="labeled" data-mult="1.20">it was labeled</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-key="denied" data-mult="1.35">they denied it</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-key="third" data-mult="1.50">third offense</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-key="pandemic" data-mult="1.15">mid-pandemic</button>
+            <button type="button" class="chip" role="radio" aria-checked="false" data-key="birthday" data-mult="1.75">on my birthday</button>
+          </div>
+        </div>
+
+        <div id="form-error" class="form-error" aria-live="polite"></div>
+
+        <button id="file-btn" type="submit" class="file-btn">FILE THE CASE</button>
+        <p class="disclaimer">Not a real court. No legal advice. Not even close.</p>
+      </form>
+    </section>
+
+    <!-- Loading screen -->
+    <section id="loading" class="screen hidden">
+      <div class="loader-stack">
+        <div class="stamp-spin" aria-hidden="true">
+          <svg viewBox="0 0 140 140" width="140" height="140">
+            <defs>
+              <path id="rim" d="M70,70 m-55,0 a55,55 0 1,1 110,0 a55,55 0 1,1 -110,0"></path>
+            </defs>
+            <circle cx="70" cy="70" r="62" fill="none" stroke="#1a1a1a" stroke-width="2"></circle>
+            <circle cx="70" cy="70" r="52" fill="none" stroke="#1a1a1a" stroke-width="1"></circle>
+            <text font-family="'IBM Plex Mono', monospace" font-size="10" letter-spacing="3" fill="#1a1a1a">
+              <textPath href="#rim" startOffset="0">CIRCUIT COURT OF HONEST GRIEVANCES ★ SEAL ★ </textPath>
+            </text>
+            <text x="70" y="76" text-anchor="middle" font-family="'Playfair Display', serif" font-weight="900" font-size="22" fill="#b1271b">S.C.</text>
+          </svg>
+        </div>
+        <p id="loader-text" class="typewriter">docketing your case…</p>
+      </div>
+    </section>
+
+    <!-- Judgment (result) screen -->
+    <section id="judgment" class="screen hidden">
+      <article id="judgment-doc" class="judgment-doc">
+        <!-- Rendered by JS -->
+      </article>
+
+      <div id="share" class="share-row">
+        <button onclick="share()" class="share-btn">SHARE THIS JUDGMENT</button>
+        <button id="reset-btn" type="button" class="reset-btn">File another case</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
