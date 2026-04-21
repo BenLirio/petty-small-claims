@@ -866,8 +866,7 @@
       shareBtn2.textContent = 'SHARE';
       shareBtn2.addEventListener('click', () => {
         if (navigator.share) {
-          // Use `text` instead of `url` to prevent mobile share targets from stripping the hash fragment.
-          navigator.share({ title: 'Receipt of payment', text: receiptUrl }).catch(() => {});
+          navigator.share({ title: 'Receipt of payment', url: receiptUrl }).catch(() => {});
         } else {
           copyBtn.click();
         }
@@ -1291,14 +1290,8 @@
       e.preventDefault();
       if (!step1Ready()) return;
       goToStep(2);
-      // Clear default chips immediately — don't show generic defaults while clerk drafts.
-      aggChipsEl.innerHTML = '';
-      if (itemChipsEl) itemChipsEl.innerHTML = '';
-      selectedAggs = [];
-      selectedItems = [];
-      updateAggSummary();
-      updateItemSummary();
-      // Kick off tailored-chip suggest; will render chips when done (or fall back to defaults on error).
+      // Chips area stays empty (with "drafting…" status) until the clerk returns;
+      // HTML no longer ships default chips, so step 2 reveals a clean slate.
       runSuggest(false);
     });
   }
@@ -1364,8 +1357,8 @@
     selectedItems = [];
     CURRENT_AGG = Object.assign({}, AGG);
     CURRENT_ITEM = Object.assign({}, ITEM);
-    renderDefaultAggChips();
-    renderDefaultItemChips();
+    aggChipsEl.innerHTML = '';
+    if (itemChipsEl) itemChipsEl.innerHTML = '';
     lastSuggestHash = 0;
     setSuggestStatus('');
     updateAggSummary();
@@ -1465,11 +1458,7 @@
     const url = location.href;
 
     if (navigator.share) {
-      // Pass the full URL (hash included) in the `text` field rather than `url`.
-      // Some mobile share targets strip the fragment from the `url` field, sending
-      // the base domain as the link and the hash as a separate plain-text chunk.
-      // Using `text` ensures the complete URL lands intact in the message body.
-      navigator.share({ title: title, text: url }).catch(() => {});
+      navigator.share({ title: title, text: text, url: url }).catch(() => {});
       return;
     }
 
@@ -1499,8 +1488,8 @@
   // ---------- Boot: hydrate from #fragment if present ----------
 
   (async function boot() {
-    // Draw default item chips (HTML has default aggravator chips inline).
-    renderDefaultItemChips();
+    // Step 2 chip rows start empty; the clerk fills them after the grievance
+    // is written. Defaults only render as a fallback when the suggest call fails.
 
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
