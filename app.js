@@ -1453,7 +1453,11 @@
     const url = location.href;
 
     if (navigator.share) {
-      navigator.share({ title: title, text: text, url: url }).catch(() => {});
+      // Share only the URL (which carries the full case in its hash fragment).
+      // Passing both text + url causes most mobile apps to show a huge wall of
+      // text AND a separate link — and some strip or break the fragment from the
+      // url field, sending the defendant to the home page instead of the case.
+      navigator.share({ title: title, url: url }).catch(() => {});
       return;
     }
 
