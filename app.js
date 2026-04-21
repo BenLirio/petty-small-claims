@@ -1119,7 +1119,7 @@
       lastSuggestHash = h;
       setSuggestStatus('aggravators and line-items tailored — pick any that apply');
     } catch (err) {
-      console.warn(‘[petty] suggest failed:’, err && err.message);
+      console.warn('[petty] suggest failed:', err && err.message);
       setSuggestStatus("couldn’t reach the clerk — using default options");
       CURRENT_AGG = Object.assign({}, AGG);
       CURRENT_ITEM = Object.assign({}, ITEM);
