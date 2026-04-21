@@ -108,6 +108,12 @@
   let selectedItems = [];
   let suggestInflight = false;
   let lastSuggestHash = 0;
+  // Options-ready gate: the FILE button stays disabled until the clerk has
+  // finished drafting + typing the chip options, even though aggravators and
+  // damages are themselves optional — we want the user to see the choices
+  // before committing.
+  let optionsReady = false;
+  let optionsReadyTimer = null;
 
   // ---------- Chips ----------
 
@@ -1046,59 +1052,117 @@
 
   // Stagger between chips so they appear like a clerk is writing them out,
   // one after the next, rather than landing simultaneously.
-  const CHIP_STAGGER_MS = 140;
+  const CHIP_STAGGER_MS = 220;
+  const CHIP_CHAR_MS = 24;
+  const CHIP_GAP_AFTER_MS = 140;
 
-  function applyClerkReveal(btn, i) {
-    btn.classList.add('chip-enter');
+  // Build the inner DOM of a chip: a hand-drawn checkbox with an SVG
+  // checkmark path (revealed by stroke-dashoffset on check) + the text span
+  // that the clerk types into character-by-character.
+  function buildChipInterior(btn) {
+    const box = document.createElement('span');
+    box.className = 'chip-box';
+    box.setAttribute('aria-hidden', 'true');
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('class', 'chip-check');
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M4 11 L9 15 L16 5');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('pathLength', '1');
+    svg.appendChild(path);
+    box.appendChild(svg);
+    btn.appendChild(box);
+    const txt = document.createElement('span');
+    txt.className = 'chip-text';
+    btn.appendChild(txt);
+    // Give each chip a tiny deterministic tilt (±0.45deg) so the list looks
+    // hand-drawn rather than mechanically aligned. Derived from the label so
+    // it's stable across re-renders of the same chip.
+    const hash = hashStr(btn.dataset.key || Math.random().toString());
+    const tilt = (((hash % 91) - 45) / 100).toFixed(2);
+    btn.style.setProperty('--chip-tilt', tilt + 'deg');
+    return txt;
+  }
+
+  // Type `fullText` into `textSpan` character-by-character. Honors
+  // prefers-reduced-motion by jumping to the full string immediately.
+  function typewriteChipText(btn, textSpan, fullText, startDelayMs) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      textSpan.textContent = fullText;
+      return startDelayMs;
+    }
+    textSpan.textContent = '';
+    btn.classList.add('chip-typing');
+    setTimeout(() => {
+      let i = 1;
+      const step = () => {
+        textSpan.textContent = fullText.slice(0, i);
+        i++;
+        if (i <= fullText.length) {
+          setTimeout(step, CHIP_CHAR_MS + Math.random() * 18);
+        } else {
+          btn.classList.remove('chip-typing');
+        }
+      };
+      step();
+    }, startDelayMs);
+    return startDelayMs + fullText.length * (CHIP_CHAR_MS + 9) + CHIP_GAP_AFTER_MS;
+  }
+
+  function makeChip(i, key, label, dataAttrs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip';
+    btn.setAttribute('role', 'checkbox');
+    btn.setAttribute('aria-checked', 'false');
+    btn.dataset.key = key;
+    Object.keys(dataAttrs || {}).forEach((k) => { btn.dataset[k] = String(dataAttrs[k]); });
     btn.style.setProperty('--chip-delay', (i * CHIP_STAGGER_MS) + 'ms');
+    const txt = buildChipInterior(btn);
+    const end = typewriteChipText(btn, txt, label, i * CHIP_STAGGER_MS);
+    return { btn: btn, endMs: end };
   }
 
   function renderAggChips(aggSet) {
     aggChipsEl.innerHTML = '';
     const newCurrent = {};
+    let lastEnd = 0;
     aggSet.forEach((a, i) => {
       const key = keyFromLabel('agg', a.label, i);
       newCurrent[key] = { label: a.label, mult: a.mult };
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      btn.setAttribute('aria-checked', 'false');
-      btn.dataset.key = key;
-      btn.dataset.mult = String(a.mult);
-      btn.textContent = a.label; // no multiplier on intake — revealed only in judgment
-      applyClerkReveal(btn, i);
+      const { btn, endMs } = makeChip(i, key, a.label, { mult: a.mult });
+      lastEnd = Math.max(lastEnd, endMs);
       aggChipsEl.appendChild(btn);
     });
     CURRENT_AGG = newCurrent;
     selectedAggs = [];
     updateAggSummary();
+    return lastEnd;
   }
 
   function renderItemChips(itemSet) {
-    if (!itemChipsEl) return;
+    if (!itemChipsEl) return 0;
     itemChipsEl.innerHTML = '';
     const newCurrent = {};
+    let lastEnd = 0;
+    // Continue the stagger after the aggravator chips so the whole step-2
+    // panel reads as one continuous hand-written sheet.
+    const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
     itemSet.forEach((a, i) => {
       const key = keyFromLabel('item', a.label, i);
       newCurrent[key] = { label: a.label, amount: a.amount };
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      btn.setAttribute('aria-checked', 'false');
-      btn.dataset.key = key;
-      btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label; // no dollar on intake — revealed only in judgment
-      // Item chips continue the stagger after the aggravator chips so the whole
-      // step 2 panel reads as one continuous hand-written sheet.
-      const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
-      applyClerkReveal(btn, offset + i);
+      const { btn, endMs } = makeChip(offset + i, key, a.label, { amount: a.amount });
+      lastEnd = Math.max(lastEnd, endMs);
       itemChipsEl.appendChild(btn);
     });
     CURRENT_ITEM = newCurrent;
     selectedItems = [];
     updateItemSummary();
+    return lastEnd;
   }
 
   async function runSuggest(manual) {
@@ -1113,21 +1177,26 @@
     if (h === lastSuggestHash && !manual) return;
     if (suggestInflight) return;
     suggestInflight = true;
-    setSuggestStatus('clerk is drafting options…');
+    markOptionsNotReady();
+    startDraftingIndicator();
 
     try {
       const out = await callSuggestLLM(plaintiff, defendant, grievance);
-      renderAggChips(out.aggravators);
-      renderItemChips(out.items);
+      stopDraftingIndicator();
+      const aggEnd = renderAggChips(out.aggravators);
+      const itemEnd = renderItemChips(out.items);
       lastSuggestHash = h;
-      setSuggestStatus('aggravators and line-items tailored — pick any that apply');
+      setSuggestStatus('the clerk’s options — pick any that apply');
+      markOptionsReadyAfter(Math.max(aggEnd, itemEnd) + 160);
     } catch (err) {
+      stopDraftingIndicator();
       console.warn('[petty] suggest failed:', err && err.message);
       setSuggestStatus("couldn’t reach the clerk — using default options");
       CURRENT_AGG = Object.assign({}, AGG);
       CURRENT_ITEM = Object.assign({}, ITEM);
-      renderDefaultAggChips();
-      renderDefaultItemChips();
+      const aggEnd = renderDefaultAggChips();
+      const itemEnd = renderDefaultItemChips();
+      markOptionsReadyAfter(Math.max(aggEnd, itemEnd) + 160);
     } finally {
       suggestInflight = false;
     }
@@ -1135,6 +1204,55 @@
 
   function setSuggestStatus(msg) {
     if (suggestStatus) suggestStatus.textContent = msg || '';
+  }
+
+  // Animated loading indicator for the status line while the clerk drafts.
+  // Cycles through dots so the user sees that something is happening and
+  // doesn't rush to click File before the options appear.
+  let draftingTimer = null;
+  const DRAFTING_FRAMES = [
+    'the clerk is drafting your options',
+    'the clerk is drafting your options.',
+    'the clerk is drafting your options..',
+    'the clerk is drafting your options...'
+  ];
+  function startDraftingIndicator() {
+    stopDraftingIndicator();
+    let i = 0;
+    setSuggestStatus(DRAFTING_FRAMES[0]);
+    draftingTimer = setInterval(() => {
+      i = (i + 1) % DRAFTING_FRAMES.length;
+      setSuggestStatus(DRAFTING_FRAMES[i]);
+    }, 320);
+  }
+  function stopDraftingIndicator() {
+    if (draftingTimer) { clearInterval(draftingTimer); draftingTimer = null; }
+  }
+
+  // FILE button gating: disabled while the clerk is drafting and while
+  // chips are still typing in. Re-enabled after the last chip finishes its
+  // typewriter animation. Aggravators & items remain optional — this is
+  // purely a "let the user see the choices first" guard.
+  function getFileBtn() { return document.getElementById('file-btn'); }
+  function setFileBtnWaiting(waiting) {
+    const fb = getFileBtn();
+    if (!fb) return;
+    fb.disabled = !!waiting;
+    fb.classList.toggle('file-btn-waiting', !!waiting);
+    fb.textContent = waiting ? 'AWAITING THE CLERK…' : 'FILE THE CASE';
+  }
+  function markOptionsNotReady() {
+    optionsReady = false;
+    if (optionsReadyTimer) { clearTimeout(optionsReadyTimer); optionsReadyTimer = null; }
+    setFileBtnWaiting(true);
+  }
+  function markOptionsReadyAfter(ms) {
+    if (optionsReadyTimer) clearTimeout(optionsReadyTimer);
+    optionsReadyTimer = setTimeout(() => {
+      optionsReady = true;
+      optionsReadyTimer = null;
+      setFileBtnWaiting(false);
+    }, Math.max(0, ms | 0));
   }
 
   if (grievanceEl) {
@@ -1193,6 +1311,9 @@
     continueBtn.addEventListener('click', (e) => {
       e.preventDefault();
       if (!step1Ready()) return;
+      // Disable FILE immediately on step 2 entry; it re-enables once the
+      // clerk returns and the chips finish typing.
+      if (!optionsReady) setFileBtnWaiting(true);
       goToStep(2);
       // Chips area stays empty (with "drafting…" status) until the clerk returns;
       // HTML no longer ships default chips, so step 2 reveals a clean slate.
@@ -1211,6 +1332,10 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errEl.textContent = '';
+    // Defense-in-depth: even though FILE is disabled while options are
+    // drafting, block any stray submit (Enter key, etc.) until the clerk's
+    // chips have finished typing.
+    if (!optionsReady) return setErr('Hold on — the clerk is still writing your options.');
 
     const plaintiff  = $('#plaintiff').value.trim();
     const defendant  = $('#defendant').value.trim();
@@ -1265,6 +1390,8 @@
     if (itemChipsEl) itemChipsEl.innerHTML = '';
     lastSuggestHash = 0;
     setSuggestStatus('');
+    stopDraftingIndicator();
+    markOptionsNotReady();
     updateAggSummary();
     updateItemSummary();
     errEl.textContent = '';
@@ -1277,38 +1404,28 @@
 
   function renderDefaultAggChips() {
     aggChipsEl.innerHTML = '';
+    let lastEnd = 0;
     Object.keys(AGG).forEach((key, i) => {
       const a = AGG[key];
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      btn.setAttribute('aria-checked', 'false');
-      btn.dataset.key = key;
-      btn.dataset.mult = String(a.mult);
-      btn.textContent = a.label;
-      applyClerkReveal(btn, i);
+      const { btn, endMs } = makeChip(i, key, a.label, { mult: a.mult });
+      lastEnd = Math.max(lastEnd, endMs);
       aggChipsEl.appendChild(btn);
     });
+    return lastEnd;
   }
 
   function renderDefaultItemChips() {
-    if (!itemChipsEl) return;
+    if (!itemChipsEl) return 0;
     itemChipsEl.innerHTML = '';
+    let lastEnd = 0;
     const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
     Object.keys(ITEM).forEach((key, i) => {
       const a = ITEM[key];
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      btn.setAttribute('aria-checked', 'false');
-      btn.dataset.key = key;
-      btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label; // amount hidden — revealed only in judgment
-      applyClerkReveal(btn, offset + i);
+      const { btn, endMs } = makeChip(offset + i, key, a.label, { amount: a.amount });
+      lastEnd = Math.max(lastEnd, endMs);
       itemChipsEl.appendChild(btn);
     });
+    return lastEnd;
   }
 
   // ---------- Serve the defendant (collection-letter style share) ----------
@@ -1394,6 +1511,10 @@
   (async function boot() {
     // Step 2 chip rows start empty; the clerk fills them after the grievance
     // is written. Defaults only render as a fallback when the suggest call fails.
+    // FILE starts in its "awaiting the clerk" state — even though the user
+    // can't see it yet from step 1, this guarantees the correct initial copy
+    // the moment they land on step 2.
+    setFileBtnWaiting(true);
 
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';

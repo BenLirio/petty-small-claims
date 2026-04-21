@@ -239,57 +239,116 @@ textarea::placeholder {
 
 /* ---------- Chips ---------- */
 
+/* Step-2 option rows are laid out as a hand-written checkbox list — one
+   item per row, ticked with a pen rather than filled pills. */
 .chips {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
 }
 
 .chip {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 13px;
-  padding: 10px 14px;
-  min-height: 44px;
-  background: var(--chip-idle);
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 4px 5px 2px;
+  min-height: 36px;
+  background: transparent;
+  border: none;
   color: var(--ink);
-  border: 1.5px solid var(--ink);
-  border-radius: 999px;
   cursor: pointer;
-  letter-spacing: 0.02em;
-  transition: background 0.12s, color 0.12s;
-}
-
-.chip[aria-checked="true"] {
-  background: var(--chip-active);
-  color: var(--chip-active-ink);
-}
-
-/* Chips appear like a clerk is typing them onto the intake form, one after
-   the next. clip-path with steps() timing gives a stamped/typewriter reveal;
-   opacity fades the chip into existence so there's no abrupt snap. Per-chip
-   stagger is set via --chip-delay in JS. */
-.chip.chip-enter {
-  animation:
-    chip-fade-in 120ms linear both,
-    chip-type-in 520ms steps(14, end) both;
+  text-align: left;
+  line-height: 1.25;
+  /* Slight per-chip tilt (set in JS) sells the hand-drawn feel. */
+  transform: rotate(var(--chip-tilt, 0deg));
+  transform-origin: left center;
+  /* Row slides in from the left as the clerk draws it onto the page. */
+  opacity: 0;
+  animation: chip-row-appear 200ms ease-out forwards;
   animation-delay: var(--chip-delay, 0ms);
+  border-radius: 0;
 }
 
-@keyframes chip-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+.chip:hover {
+  background: rgba(24, 23, 20, 0.04);
 }
 
-@keyframes chip-type-in {
-  from { clip-path: inset(0 100% 0 0); }
-  to   { clip-path: inset(0 0 0 0); }
+.chip:focus-visible {
+  outline: 2px dashed var(--ink-soft);
+  outline-offset: 2px;
+}
+
+.chip-box {
+  position: relative;
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 1.6px solid var(--ink);
+  background: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+  /* Tiny rotation so the box looks drawn, not printed. */
+  transform: rotate(-1.5deg);
+}
+
+.chip-check {
+  position: absolute;
+  inset: -4px -3px -3px -4px;
+  width: calc(100% + 7px);
+  height: calc(100% + 7px);
+  pointer-events: none;
+  overflow: visible;
+}
+
+.chip-check path {
+  stroke: var(--stamp-red);
+  stroke-width: 2.8;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 260ms ease-out;
+}
+
+.chip[aria-checked="true"] .chip-check path {
+  stroke-dashoffset: 0;
+}
+
+.chip-text {
+  font-family: 'Special Elite', 'Courier New', monospace;
+  font-size: 16px;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  /* Reserve a line of height even before typing starts, so the row
+     doesn't collapse and the checkbox stays vertically centered. */
+  min-height: 1.25em;
+  display: inline-block;
+}
+
+/* Blinking typewriter cursor at the end of the text while a chip is being
+   typed. Removed once the chip's label is fully drawn. */
+.chip.chip-typing .chip-text::after {
+  content: '▋';
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--ink-soft);
+  animation: chip-cursor-blink 540ms steps(2, end) infinite;
+}
+
+@keyframes chip-row-appear {
+  from { opacity: 0; transform: translateX(-8px) rotate(var(--chip-tilt, 0deg)); }
+  to   { opacity: 1; transform: translateX(0)    rotate(var(--chip-tilt, 0deg)); }
+}
+
+@keyframes chip-cursor-blink {
+  50% { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chip.chip-enter {
+  .chip {
     animation: none;
+    opacity: 1;
   }
+  .chip.chip-typing .chip-text::after { animation: none; }
+  .chip-check path { transition: none; }
 }
 
 /* ---------- Buttons ---------- */
@@ -314,6 +373,24 @@ textarea::placeholder {
 .file-btn:active {
   transform: translate(2px, 2px);
   box-shadow: 2px 2px 0 var(--stamp-red);
+}
+
+.file-btn.file-btn-waiting,
+.file-btn:disabled {
+  background: var(--ink-faint);
+  color: var(--paper);
+  box-shadow: 4px 4px 0 rgba(177, 39, 27, 0.35);
+  cursor: not-allowed;
+  font-family: 'Special Elite', 'Courier New', monospace;
+  font-weight: 400;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.file-btn.file-btn-waiting:active,
+.file-btn:disabled:active {
+  transform: none;
+  box-shadow: 4px 4px 0 rgba(177, 39, 27, 0.35);
 }
 
 .disclaimer {
