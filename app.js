@@ -39,8 +39,21 @@
       });
       if (!res.ok) return null;
       const j = await res.json();
-      return j && typeof j.id === 'string' ? j.id : null;
+      if (!j || typeof j.id !== 'string') return null;
+      return { id: j.id, token: typeof j.token === 'string' ? j.token : null };
     } catch (_) { return null; }
+  }
+
+  async function patchCaseInStore(id, token, fragString) {
+    if (!id || !token) return false;
+    try {
+      const res = await fetch(CASE_STORE + '/case/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, data: fragString })
+      });
+      return res.ok;
+    } catch (_) { return false; }
   }
 
   async function loadCaseFromStore(id) {
@@ -52,8 +65,14 @@
     } catch (_) { return null; }
   }
 
-  function shortUrlFor(id) {
-    return location.origin + location.pathname + '?c=' + id;
+  function shortUrlFor(id, token) {
+    const base = location.origin + location.pathname + '?c=' + id;
+    return token ? (base + '&k=' + token) : base;
+  }
+
+  function currentShortUrlParams() {
+    const params = new URLSearchParams(location.search);
+    return { id: params.get('c') || '', token: params.get('k') || '' };
   }
   const SLUG = 'petty-small-claims';
 
@@ -707,7 +726,33 @@
       blob.ps = extra.paidSig || '';
       if (extra.paidAt) blob.pt = extra.paidAt;
     }
+    // Bundle the LLM-computed judgment payload into the blob so any device
+    // that hydrates this case from the case-store can render the judgment
+    // INSTANTLY — no LLM call, no loading screen. Previously, cross-device
+    // opens (recipient reading a shared link, sender reopening on a second
+    // device) had to re-run callLLM because the per-device cache was empty.
+    if (extra && extra.payload) {
+      const pl = extra.payload;
+      blob.pl = {
+        cn: pl.case_number,
+        co: pl.county,
+        f:  Array.isArray(pl.findings) ? pl.findings.slice(0, 3) : [],
+        v:  pl.verdict_archetype,
+        bd: pl.base_damages
+      };
+    }
     return b64urlEncode(JSON.stringify(blob));
+  }
+
+  function payloadFromPl(pl) {
+    if (!pl || typeof pl !== 'object') return null;
+    return {
+      case_number: pl.cn,
+      county: pl.co,
+      findings: Array.isArray(pl.f) ? pl.f.slice(0, 3) : [],
+      verdict_archetype: pl.v,
+      base_damages: Number(pl.bd) || 0
+    };
   }
 
   // Decode v1..v4 for back-compat.
@@ -840,91 +885,163 @@
       return;
     }
 
+    // ---- Recipient flow ----
+    //
+    // Two-step button with a confirm tap. First tap ("TENDER PAYMENT") swaps
+    // the control into a confirm row. Second tap ("CONFIRM — REMIT PAYMENT")
+    // actually commits the paid flag — it PATCHes the existing case-store
+    // row if we have {id, token} in the URL (the happy path; recipient
+    // got a proper ?c=X&k=Y link), so the plaintiff sees PAID automatically
+    // next time they reopen the original link, with no receipt-URL
+    // ping-pong. If PATCH is unavailable (legacy hash-only link, or the
+    // short-URL service failed), we fall back to the old receipt-URL flow.
     const wrap = document.createElement('div');
     wrap.className = 'paid-receiver';
     const served = document.createElement('div');
     served.className = 'served-banner';
-    served.innerHTML = '<strong>You have been served.</strong> The plaintiff has asked you to settle this claim. When you\'re ready, mark it paid below and return the receipt URL to them as proof.';
+    served.innerHTML = '<strong>You have been served.</strong> The plaintiff has filed a claim against you for an amount assessed by the clerk. When you\'re ready, tender payment below and the court will update the record.';
     wrap.appendChild(served);
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mark-paid-btn';
-    btn.textContent = 'MARK THIS CLAIM AS PAID';
+    btn.textContent = 'TENDER PAYMENT';
     wrap.appendChild(btn);
+
     const hint = document.createElement('p');
     hint.className = 'paid-hint';
-    hint.textContent = 'Defendants only. Marking paid generates a short receipt URL you send back to the plaintiff as proof of payment.';
+    hint.textContent = 'Defendants only. Stamps the claim PAID on the court record.';
     wrap.appendChild(hint);
 
     const receiptBox = document.createElement('div');
     receiptBox.className = 'receipt-box hidden';
     wrap.appendChild(receiptBox);
 
-    btn.addEventListener('click', async () => {
-      const sig = paidSignature(ctx);
-      const nowStamp = todayStamp();
-      const frag = encodeCaseToFragment(ctx, { paid: 1, paidSig: sig, paidAt: nowStamp });
-      // Try the short-URL store so the receipt link is a clean, share-friendly
-      // URL. On failure we fall back to the hash fragment — the receipt still
-      // works, just with the iOS auto-linkify limitation.
-      const shortId = await saveCaseToStore(frag);
-      const receiptUrl = shortId
-        ? shortUrlFor(shortId)
-        : (location.origin + location.pathname + '#' + frag);
-      history.replaceState(null, '', shortId ? ('?c=' + shortId) : ('#' + frag));
-      renderPaidStamp(nowStamp);
-
-      receiptBox.classList.remove('hidden');
-      receiptBox.innerHTML = '';
-      const lab = document.createElement('div');
-      lab.className = 'receipt-label';
-      lab.textContent = 'Receipt URL — send this back to the plaintiff:';
-      const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.readOnly = true;
-      inp.value = receiptUrl;
-      inp.className = 'receipt-url';
-      const row = document.createElement('div');
-      row.className = 'receipt-row';
-      const copyBtn = document.createElement('button');
-      copyBtn.type = 'button';
-      copyBtn.className = 'receipt-copy';
-      copyBtn.textContent = 'COPY RECEIPT URL';
-      copyBtn.addEventListener('click', () => {
-        try {
-          inp.select();
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(receiptUrl)
-              .then(() => { copyBtn.textContent = 'COPIED'; })
-              .catch(() => { copyBtn.textContent = 'SELECT + COPY'; });
-          } else {
-            document.execCommand && document.execCommand('copy');
-            copyBtn.textContent = 'COPIED';
-          }
-        } catch (e) { /* ignore */ }
-      });
-      const shareBtn2 = document.createElement('button');
-      shareBtn2.type = 'button';
-      shareBtn2.className = 'receipt-share';
-      shareBtn2.textContent = 'SHARE';
-      shareBtn2.addEventListener('click', () => {
-        if (navigator.share) {
-          navigator.share({ title: 'Receipt of payment', url: receiptUrl }).catch(() => {});
-        } else {
-          copyBtn.click();
-        }
-      });
-      row.appendChild(copyBtn);
-      row.appendChild(shareBtn2);
-      receiptBox.appendChild(lab);
-      receiptBox.appendChild(inp);
-      receiptBox.appendChild(row);
-
+    // First tap: swap the single button for a confirm/cancel pair so a
+    // misclick can be undone before the stamp lands.
+    btn.addEventListener('click', () => {
       btn.style.display = 'none';
       hint.style.display = 'none';
+
+      const confirmRow = document.createElement('div');
+      confirmRow.className = 'confirm-remit-row';
+      const question = document.createElement('div');
+      question.className = 'confirm-remit-q';
+      question.textContent = 'Remit payment in full and stamp this claim PAID?';
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'mark-paid-btn confirm-remit-yes';
+      confirmBtn.textContent = 'CONFIRM — REMIT PAYMENT';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'confirm-remit-no';
+      cancelBtn.textContent = 'cancel';
+      confirmRow.appendChild(question);
+      confirmRow.appendChild(confirmBtn);
+      confirmRow.appendChild(cancelBtn);
+      wrap.insertBefore(confirmRow, receiptBox);
+
+      cancelBtn.addEventListener('click', () => {
+        confirmRow.remove();
+        btn.style.display = '';
+        hint.style.display = '';
+      });
+
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = true;
+        confirmBtn.textContent = 'STAMPING…';
+        await commitPayment(ctx, payload, wrap, confirmRow, receiptBox);
+      });
     });
 
     paidSection.appendChild(wrap);
+  }
+
+  async function commitPayment(ctx, payload, wrap, confirmRow, receiptBox) {
+    const sig = paidSignature(ctx);
+    const nowStamp = todayStamp();
+    const frag = encodeCaseToFragment(ctx, {
+      paid: 1, paidSig: sig, paidAt: nowStamp, payload
+    });
+
+    // Preferred path: PATCH the existing row in place so the sender's
+    // original share URL starts returning the paid blob — no second URL
+    // needs to travel back.
+    const { id, token } = currentShortUrlParams();
+    let patched = false;
+    if (id && token) patched = await patchCaseInStore(id, token, frag);
+
+    renderPaidStamp(nowStamp);
+    confirmRow.remove();
+
+    if (patched) {
+      // Happy path: recipient is done. The plaintiff sees PAID whenever they
+      // reopen the link they already sent. No receipt URL to ship back.
+      const done = document.createElement('div');
+      done.className = 'paid-done-note';
+      done.innerHTML = '<strong>Done.</strong> The court record has been updated. The plaintiff will see this claim marked <strong>PAID</strong> the next time they open the link they sent you.';
+      wrap.appendChild(done);
+      return;
+    }
+
+    // Fallback: couldn't PATCH (no token in URL, or the store rejected).
+    // Create a new short-URL row and surface the receipt-URL ping-pong flow.
+    let receiptUrl;
+    const saved = await saveCaseToStore(frag);
+    if (saved && saved.id) {
+      receiptUrl = shortUrlFor(saved.id, saved.token);
+      history.replaceState(null, '', '?c=' + saved.id + (saved.token ? '&k=' + saved.token : ''));
+    } else {
+      receiptUrl = location.origin + location.pathname + '#' + frag;
+      history.replaceState(null, '', '#' + frag);
+    }
+
+    receiptBox.classList.remove('hidden');
+    receiptBox.innerHTML = '';
+    const lab = document.createElement('div');
+    lab.className = 'receipt-label';
+    lab.textContent = 'Receipt URL — send this back to the plaintiff:';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.readOnly = true;
+    inp.value = receiptUrl;
+    inp.className = 'receipt-url';
+    const row = document.createElement('div');
+    row.className = 'receipt-row';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'receipt-copy';
+    copyBtn.textContent = 'COPY RECEIPT URL';
+    copyBtn.addEventListener('click', () => {
+      try {
+        inp.select();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(receiptUrl)
+            .then(() => { copyBtn.textContent = 'COPIED'; })
+            .catch(() => { copyBtn.textContent = 'SELECT + COPY'; });
+        } else {
+          document.execCommand && document.execCommand('copy');
+          copyBtn.textContent = 'COPIED';
+        }
+      } catch (e) { /* ignore */ }
+    });
+    const shareBtn2 = document.createElement('button');
+    shareBtn2.type = 'button';
+    shareBtn2.className = 'receipt-share';
+    shareBtn2.textContent = 'SHARE';
+    shareBtn2.addEventListener('click', () => {
+      if (navigator.share) {
+        navigator.share({ title: 'Receipt of payment', url: receiptUrl }).catch(() => {});
+      } else {
+        copyBtn.click();
+      }
+    });
+    row.appendChild(copyBtn);
+    row.appendChild(shareBtn2);
+    receiptBox.appendChild(lab);
+    receiptBox.appendChild(inp);
+    receiptBox.appendChild(row);
   }
 
   function renderAndShow(ctx, payload, opts) {
@@ -1475,10 +1592,14 @@
     if (elapsed < 900) await new Promise((r) => setTimeout(r, 900 - elapsed));
     stopLoading();
 
-    const frag = encodeCaseToFragment(ctx);
-    const shortId = await saveCaseToStore(frag);
-    if (shortId) {
-      history.replaceState(null, '', location.pathname + '?c=' + shortId);
+    const frag = encodeCaseToFragment(ctx, { payload });
+    const saved = await saveCaseToStore(frag);
+    if (saved && saved.id) {
+      // Token goes in the URL so whoever holds the link (sender OR recipient)
+      // can PATCH the same row to flip paid state, instead of having to POST
+      // a second row and ship a receipt URL back.
+      const qs = '?c=' + saved.id + (saved.token ? '&k=' + saved.token : '');
+      history.replaceState(null, '', location.pathname + qs);
     } else {
       // Fallback: if the store is unreachable, keep the old hash-fragment
       // behavior so at least the link still hydrates (just poorly on iOS).
@@ -1755,13 +1876,24 @@
       aggs: selectedAggs, items: selectedItems
     });
 
-    // 3. Payload resolution. v1/v2 carries an inline payload; v3/v4 go through
-    //    cache → LLM → deterministic fallback. We also collect any legacy
-    //    micro_damages here; they'll be migrated into items below.
+    // 3. Payload resolution.
+    //    (a) Newer v4 blobs bundle the LLM-computed payload inline as `pl`
+    //        so cross-device hydration is instant — no cache miss, no LLM
+    //        call, no loading screen. This is the happy path.
+    //    (b) Older blobs without `pl` fall through to cache → LLM → fallback.
+    //    (c) v1/v2 carries an inline payload; v3 had micro_damages embedded
+    //        in the cached payload. We also collect any legacy micro_damages
+    //        here; they'll be migrated into items below.
     let payload = null;
     let legacyMicroDamages = null;
 
-    if (norm.inlinePayload) {
+    if (o.pl) {
+      payload = payloadFromPl(o.pl);
+      // Warm the local cache so later reopens from a hash fragment (no `pl`)
+      // still hit. inputHash ignores items, so the migration step below
+      // doesn't invalidate the key.
+      if (payload) writeCache(ctx, payload);
+    } else if (norm.inlinePayload) {
       const ai = norm.inlinePayload;
       if (norm.absorbMicroDamages === 'from-inline') legacyMicroDamages = ai.micro_damages;
       payload = {

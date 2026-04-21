@@ -981,6 +981,64 @@ textarea::placeholder {
   line-height: 1.5;
 }
 
+/* Inline confirm row shown after the first tap of TENDER PAYMENT — forces
+   a second deliberate click before the stamp lands. */
+.confirm-remit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 2px dashed var(--stamp-red);
+  background: rgba(177, 39, 27, 0.05);
+}
+
+.confirm-remit-q {
+  font-family: 'Special Elite', monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.confirm-remit-yes {
+  /* inherits .mark-paid-btn styling; override box-shadow to a softer thud
+     so the two ink-colored buttons aren't visually identical. */
+  box-shadow: 3px 3px 0 var(--stamp-red);
+}
+
+.confirm-remit-yes:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.confirm-remit-no {
+  align-self: flex-start;
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+/* Shown after a successful PATCH — no receipt URL needed, sender will see
+   PAID next time they reopen the link they already sent. */
+.paid-done-note {
+  font-family: 'Special Elite', monospace;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+  padding: 12px 14px;
+  border: 2px solid var(--stamp-red);
+  background: rgba(177, 39, 27, 0.06);
+  color: var(--ink);
+}
+
 .receipt-box {
   border: 1.5px dashed var(--ink);
   padding: 10px 12px;
