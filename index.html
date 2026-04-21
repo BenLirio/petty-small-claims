@@ -52,10 +52,7 @@
           <p class="step-caption">Anything else for the record? <span class="step-caption-sub">(optional)</span></p>
 
           <div class="form-row">
-            <div class="chip-label-row">
-              <label class="chip-label">Aggravating factors</label>
-              <button id="suggest-btn" type="button" class="suggest-btn" title="Ask the clerk to draft chip options tailored to your grievance">TAILOR TO GRIEVANCE</button>
-            </div>
+            <label class="chip-label">Aggravating factors</label>
             <div id="suggest-status" class="suggest-status" aria-live="polite"></div>
             <div id="aggravator-chips" class="chips" role="group" aria-label="Aggravating factors">
               <!-- Rendered by JS once the clerk returns tailored suggestions. -->
@@ -67,16 +64,6 @@
             <label class="chip-label">Petty damages <span class="label-hint">(check any that fit)</span></label>
             <div id="item-chips" class="chips" role="group" aria-label="Itemized damages">
               <!-- Rendered by JS -->
-            </div>
-            <div id="custom-item-row" class="custom-item-row">
-              <button id="custom-item-toggle" type="button" class="custom-item-toggle">+ other (write your own)</button>
-              <div id="custom-item-editor" class="custom-item-editor hidden">
-                <input id="custom-item-label" type="text" maxlength="42" placeholder="e.g. ruined my morning" aria-label="Custom line-item label">
-                <div class="custom-item-amt-row">
-                  <button id="custom-item-add" type="button" class="custom-item-add">ADD TO RECORD</button>
-                </div>
-                <p class="custom-item-hint">The clerk will assess the amount. You just describe the harm.</p>
-              </div>
             </div>
             <div id="item-summary" class="agg-summary" aria-live="polite"></div>
           </div>

@@ -265,6 +265,33 @@ textarea::placeholder {
   color: var(--chip-active-ink);
 }
 
+/* Chips appear like a clerk is typing them onto the intake form, one after
+   the next. clip-path with steps() timing gives a stamped/typewriter reveal;
+   opacity fades the chip into existence so there's no abrupt snap. Per-chip
+   stagger is set via --chip-delay in JS. */
+.chip.chip-enter {
+  animation:
+    chip-fade-in 120ms linear both,
+    chip-type-in 520ms steps(14, end) both;
+  animation-delay: var(--chip-delay, 0ms);
+}
+
+@keyframes chip-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes chip-type-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip.chip-enter {
+    animation: none;
+  }
+}
+
 /* ---------- Buttons ---------- */
 
 .file-btn {
@@ -686,33 +713,6 @@ textarea::placeholder {
   margin-left: 4px;
 }
 
-.chip-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.suggest-btn {
-  font-family: 'Special Elite', monospace;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  background: transparent;
-  color: var(--ink);
-  border: 1px dashed var(--ink);
-  padding: 6px 10px;
-  min-height: 32px;
-  cursor: pointer;
-  border-radius: 0;
-}
-
-.suggest-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .suggest-status {
   font-family: 'Special Elite', monospace;
   font-size: 11px;
@@ -729,99 +729,6 @@ textarea::placeholder {
   color: var(--ink-soft);
   min-height: 16px;
   margin: 6px 0 0;
-}
-
-/* ---------- Custom "other" line-item editor ---------- */
-
-.custom-item-row {
-  margin-top: 8px;
-}
-
-.custom-item-toggle {
-  font-family: 'Special Elite', monospace;
-  font-size: 12px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: transparent;
-  color: var(--ink);
-  border: 1px dashed var(--ink);
-  padding: 8px 12px;
-  min-height: 36px;
-  cursor: pointer;
-  border-radius: 999px;
-}
-
-.custom-item-toggle[aria-expanded="true"] {
-  background: var(--ink);
-  color: var(--paper);
-  border-style: solid;
-}
-
-.custom-item-editor {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1.5px dashed var(--ink);
-  background: rgba(255, 255, 255, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.custom-item-editor.hidden {
-  display: none;
-}
-
-.custom-item-editor input[type="text"],
-.custom-item-editor input[type="number"] {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 14px;
-  border: none;
-  border-bottom: 1.5px solid var(--ink);
-  background: transparent;
-  padding: 6px 2px;
-  min-height: 40px;
-  outline: none;
-}
-
-.custom-item-amt-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.custom-dollar {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 16px;
-  color: var(--ink-soft);
-}
-
-.custom-item-editor input[type="number"] {
-  flex: 1 1 120px;
-  max-width: 160px;
-  min-width: 100px;
-}
-
-.custom-item-add {
-  font-family: 'Special Elite', monospace;
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  background: var(--stamp-red);
-  color: #f7efdc;
-  border: none;
-  padding: 8px 14px;
-  min-height: 40px;
-  cursor: pointer;
-  border-radius: 0;
-}
-
-.custom-item-hint {
-  font-family: 'Special Elite', monospace;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--ink-faint);
-  margin: 0;
 }
 
 /* ---------- Paid stamp + actions ---------- */

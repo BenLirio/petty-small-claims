@@ -51,8 +51,6 @@
   let CURRENT_ITEM = Object.assign({}, ITEM);
 
   const MAX_COMBINED_MULT = 1.99;
-  const CUSTOM_ITEM_KEY = 'custom-other';
-  const MAX_CUSTOM_ITEM_AMT = 4.99;
 
   // 8 verdict archetypes (ALL flattering to the plaintiff)
   const VERDICTS = [
@@ -101,7 +99,6 @@
   const aggChipsEl  = $('#aggravator-chips');
   const itemChipsEl = $('#item-chips');
   const grievanceEl = $('#grievance');
-  const suggestBtn  = $('#suggest-btn');
   const suggestStatus = $('#suggest-status');
   const aggSummary = $('#agg-summary');
   const itemSummary = $('#item-summary');
@@ -1047,6 +1044,15 @@
     return (k || (prefix + idx)) + '-' + idx;
   }
 
+  // Stagger between chips so they appear like a clerk is writing them out,
+  // one after the next, rather than landing simultaneously.
+  const CHIP_STAGGER_MS = 140;
+
+  function applyClerkReveal(btn, i) {
+    btn.classList.add('chip-enter');
+    btn.style.setProperty('--chip-delay', (i * CHIP_STAGGER_MS) + 'ms');
+  }
+
   function renderAggChips(aggSet) {
     aggChipsEl.innerHTML = '';
     const newCurrent = {};
@@ -1061,6 +1067,7 @@
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
       btn.textContent = a.label; // no multiplier on intake — revealed only in judgment
+      applyClerkReveal(btn, i);
       aggChipsEl.appendChild(btn);
     });
     CURRENT_AGG = newCurrent;
@@ -1070,8 +1077,6 @@
 
   function renderItemChips(itemSet) {
     if (!itemChipsEl) return;
-    // Preserve any user-added custom line item across re-suggests.
-    const preservedCustom = CURRENT_ITEM[CUSTOM_ITEM_KEY] || null;
     itemChipsEl.innerHTML = '';
     const newCurrent = {};
     itemSet.forEach((a, i) => {
@@ -1085,14 +1090,14 @@
       btn.dataset.key = key;
       btn.dataset.amount = String(a.amount);
       btn.textContent = a.label; // no dollar on intake — revealed only in judgment
+      // Item chips continue the stagger after the aggravator chips so the whole
+      // step 2 panel reads as one continuous hand-written sheet.
+      const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
+      applyClerkReveal(btn, offset + i);
       itemChipsEl.appendChild(btn);
     });
     CURRENT_ITEM = newCurrent;
     selectedItems = [];
-    if (preservedCustom) {
-      CURRENT_ITEM[CUSTOM_ITEM_KEY] = preservedCustom;
-      renderCustomChipIfPresent();
-    }
     updateItemSummary();
   }
 
@@ -1109,7 +1114,6 @@
     if (suggestInflight) return;
     suggestInflight = true;
     setSuggestStatus('clerk is drafting options…');
-    if (suggestBtn) suggestBtn.disabled = true;
 
     try {
       const out = await callSuggestLLM(plaintiff, defendant, grievance);
@@ -1126,7 +1130,6 @@
       renderDefaultItemChips();
     } finally {
       suggestInflight = false;
-      if (suggestBtn) suggestBtn.disabled = false;
     }
   }
 
@@ -1136,105 +1139,6 @@
 
   if (grievanceEl) {
     grievanceEl.addEventListener('blur', () => { runSuggest(false); });
-  }
-  if (suggestBtn) {
-    suggestBtn.addEventListener('click', (e) => { e.preventDefault(); runSuggest(true); });
-  }
-
-  // ---------- Custom "other" line-item editor ----------
-  //
-  // User can add ONE custom sub-$5 line item. Uses a reserved key
-  // (CUSTOM_ITEM_KEY) in CURRENT_ITEM so existing encode / render / share
-  // flows pick it up with no schema change. Adding again replaces the prior
-  // custom item.
-
-  const customToggle = document.getElementById('custom-item-toggle');
-  const customEditor = document.getElementById('custom-item-editor');
-  const customLabelEl = document.getElementById('custom-item-label');
-  const customAmtEl = document.getElementById('custom-item-amount'); // may be null after redesign
-  const customAddBtn = document.getElementById('custom-item-add');
-
-  // Derive a petty dollar amount (0.25..4.99) deterministically from the label
-  // text so the user never has to assign it themselves. Same label -> same
-  // amount, keeping share URLs stable.
-  function assessCustomAmount(label) {
-    const h = hashStr(String(label || '').toLowerCase() + '|assess');
-    const rand = prng(h || 1);
-    const v = 0.25 + rand() * (MAX_CUSTOM_ITEM_AMT - 0.25); // 0.25..4.99
-    return round2(v);
-  }
-
-  function openCustomEditor() {
-    if (!customEditor) return;
-    customEditor.classList.remove('hidden');
-    if (customToggle) customToggle.setAttribute('aria-expanded', 'true');
-    if (customLabelEl) customLabelEl.focus();
-  }
-  function closeCustomEditor() {
-    if (!customEditor) return;
-    customEditor.classList.add('hidden');
-    if (customToggle) customToggle.setAttribute('aria-expanded', 'false');
-  }
-
-  function renderCustomChipIfPresent() {
-    if (!itemChipsEl) return;
-    if (!CURRENT_ITEM[CUSTOM_ITEM_KEY]) return;
-    // If a chip with that key already exists, replace its text; otherwise append.
-    let existing = itemChipsEl.querySelector('.chip[data-key="' + CUSTOM_ITEM_KEY + '"]');
-    const def = CURRENT_ITEM[CUSTOM_ITEM_KEY];
-    if (!existing) {
-      existing = document.createElement('button');
-      existing.type = 'button';
-      existing.className = 'chip';
-      existing.setAttribute('role', 'checkbox');
-      existing.setAttribute('aria-checked', 'false');
-      existing.dataset.key = CUSTOM_ITEM_KEY;
-      itemChipsEl.appendChild(existing);
-    }
-    existing.dataset.amount = String(def.amount);
-    existing.textContent = def.label; // amount hidden — revealed only in judgment
-    // Auto-select the just-added custom chip.
-    existing.setAttribute('aria-checked', 'true');
-    if (selectedItems.indexOf(CUSTOM_ITEM_KEY) < 0) selectedItems.push(CUSTOM_ITEM_KEY);
-    updateItemSummary();
-  }
-
-  if (customToggle) {
-    customToggle.setAttribute('aria-expanded', 'false');
-    customToggle.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (customEditor && customEditor.classList.contains('hidden')) openCustomEditor();
-      else closeCustomEditor();
-    });
-  }
-
-  function handleCustomAdd() {
-    if (!customLabelEl) return;
-    const label = (customLabelEl.value || '').trim().replace(/["'\.]+$/g, '').slice(0, 42);
-    if (!label || label.length < 2) {
-      customLabelEl.focus();
-      return;
-    }
-    // The clerk (this function) decides the dollar amount — user never sees or
-    // enters one. Deterministic so share URLs reproduce the same award.
-    const amt = assessCustomAmount(label);
-
-    CURRENT_ITEM[CUSTOM_ITEM_KEY] = { label: label, amount: amt };
-    renderCustomChipIfPresent();
-    closeCustomEditor();
-    // Leave label in the field so the user can tweak + re-add if they want.
-  }
-
-  if (customAddBtn) {
-    customAddBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      handleCustomAdd();
-    });
-  }
-  if (customLabelEl) {
-    customLabelEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); handleCustomAdd(); }
-    });
   }
 
   // ---------- Progressive disclosure (step 1 → step 2) ----------
@@ -1364,9 +1268,6 @@
     updateAggSummary();
     updateItemSummary();
     errEl.textContent = '';
-    if (customLabelEl) customLabelEl.value = '';
-    if (customAmtEl) customAmtEl.value = '';
-    closeCustomEditor();
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
     goToStep(1);
@@ -1376,7 +1277,7 @@
 
   function renderDefaultAggChips() {
     aggChipsEl.innerHTML = '';
-    Object.keys(AGG).forEach((key) => {
+    Object.keys(AGG).forEach((key, i) => {
       const a = AGG[key];
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1386,6 +1287,7 @@
       btn.dataset.key = key;
       btn.dataset.mult = String(a.mult);
       btn.textContent = a.label;
+      applyClerkReveal(btn, i);
       aggChipsEl.appendChild(btn);
     });
   }
@@ -1393,7 +1295,8 @@
   function renderDefaultItemChips() {
     if (!itemChipsEl) return;
     itemChipsEl.innerHTML = '';
-    Object.keys(ITEM).forEach((key) => {
+    const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
+    Object.keys(ITEM).forEach((key, i) => {
       const a = ITEM[key];
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1403,6 +1306,7 @@
       btn.dataset.key = key;
       btn.dataset.amount = String(a.amount);
       btn.textContent = a.label; // amount hidden — revealed only in judgment
+      applyClerkReveal(btn, offset + i);
       itemChipsEl.appendChild(btn);
     });
   }
