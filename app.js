@@ -866,7 +866,8 @@
       shareBtn2.textContent = 'SHARE';
       shareBtn2.addEventListener('click', () => {
         if (navigator.share) {
-          navigator.share({ title: 'Receipt of payment', url: receiptUrl }).catch(() => {});
+          // Use `text` instead of `url` to prevent mobile share targets from stripping the hash fragment.
+          navigator.share({ title: 'Receipt of payment', text: receiptUrl }).catch(() => {});
         } else {
           copyBtn.click();
         }
@@ -1118,8 +1119,12 @@
       lastSuggestHash = h;
       setSuggestStatus('aggravators and line-items tailored — pick any that apply');
     } catch (err) {
-      console.warn('[petty] suggest failed:', err && err.message);
-      setSuggestStatus('couldn’t reach the clerk — using default options');
+      console.warn(‘[petty] suggest failed:’, err && err.message);
+      setSuggestStatus(‘couldn’t reach the clerk — using default options’);
+      CURRENT_AGG = Object.assign({}, AGG);
+      CURRENT_ITEM = Object.assign({}, ITEM);
+      renderDefaultAggChips();
+      renderDefaultItemChips();
     } finally {
       suggestInflight = false;
       if (suggestBtn) suggestBtn.disabled = false;
@@ -1286,7 +1291,14 @@
       e.preventDefault();
       if (!step1Ready()) return;
       goToStep(2);
-      // Kick off tailored-chip suggest in the background once user lands on step 2.
+      // Clear default chips immediately — don't show generic defaults while clerk drafts.
+      aggChipsEl.innerHTML = '';
+      if (itemChipsEl) itemChipsEl.innerHTML = '';
+      selectedAggs = [];
+      selectedItems = [];
+      updateAggSummary();
+      updateItemSummary();
+      // Kick off tailored-chip suggest; will render chips when done (or fall back to defaults on error).
       runSuggest(false);
     });
   }
@@ -1453,11 +1465,11 @@
     const url = location.href;
 
     if (navigator.share) {
-      // Share only the URL (which carries the full case in its hash fragment).
-      // Passing both text + url causes most mobile apps to show a huge wall of
-      // text AND a separate link — and some strip or break the fragment from the
-      // url field, sending the defendant to the home page instead of the case.
-      navigator.share({ title: title, url: url }).catch(() => {});
+      // Pass the full URL (hash included) in the `text` field rather than `url`.
+      // Some mobile share targets strip the fragment from the `url` field, sending
+      // the base domain as the link and the hash as a separate plain-text chunk.
+      // Using `text` ensures the complete URL lands intact in the message body.
+      navigator.share({ title: title, text: url }).catch(() => {});
       return;
     }
 
