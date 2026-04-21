@@ -1065,7 +1065,12 @@
     } else if (isSender && readPaidLocally(ctx)) {
       renderPaidStamp(readPaidLocally(ctx));
     }
-    if (shareSection) shareSection.style.display = '';
+    // Only the plaintiff (the filer) gets the SERVE THE DEFENDANT / "file
+    // another case" controls. Recipients land here via a shared link and
+    // should only see the judgment + TENDER PAYMENT flow below — showing
+    // them the serve button would suggest they're supposed to re-share the
+    // link (to themselves, effectively) and drowns out the real next step.
+    if (shareSection) shareSection.style.display = isSender ? '' : 'none';
     renderPaidActions(ctx, payload, state);
     show(judgment);
   }
