@@ -932,6 +932,16 @@
     doc.innerHTML = renderJudgment(ctx, payload);
     const state = opts || {};
     const isSender = senderHasCase(ctx);
+    // Label the recipient's view so they know this case is addressed to them;
+    // equivalently, sender sees "you filed this" so there's no ambiguity when
+    // the same link is opened on both phones. Sits above the case header.
+    const roleTag = document.createElement('div');
+    roleTag.className = 'role-tag';
+    roleTag.textContent = isSender
+      ? '— on file: you filed this claim'
+      : '— served to you: ' + (ctx.defendant || 'defendant');
+    doc.insertBefore(roleTag, doc.firstChild);
+
     const sigValid = state.paid && state.paidSig === paidSignature(ctx);
     if (sigValid) {
       renderPaidStamp(state.paidAt || '');
@@ -1167,17 +1177,60 @@
     return { btn: btn, endMs: end };
   }
 
-  function renderAggChips(aggSet) {
-    aggChipsEl.innerHTML = '';
-    const newCurrent = {};
+  // Render a list of chips into a container. Single unified path for all chip
+  // rendering — animated (LLM- or default-sourced) and non-animated (hydrated
+  // from a shared link) — so there's only one place to fix a chip bug.
+  //
+  //   specs   : [{ key, label, dataset: {mult|amount}, checked? }]
+  //   animate : true → typewriter reveal via makeChip; false → plain chip
+  //   baseOffset : used by animated renders to continue the stagger across
+  //                the agg→item section so they read as one sheet
+  function renderChipList(container, specs, opts) {
+    if (!container) return 0;
+    opts = opts || {};
+    const animate = opts.animate !== false;
+    const baseOffset = opts.baseOffset || 0;
+    container.innerHTML = '';
     let lastEnd = 0;
-    aggSet.forEach((a, i) => {
+    specs.forEach((s, i) => {
+      let btn;
+      if (animate) {
+        const r = makeChip(baseOffset + i, s.key, s.label, s.dataset || {});
+        btn = r.btn;
+        lastEnd = Math.max(lastEnd, r.endMs);
+      } else {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip';
+        btn.setAttribute('role', 'checkbox');
+        btn.dataset.key = s.key;
+        Object.keys(s.dataset || {}).forEach((k) => { btn.dataset[k] = String(s.dataset[k]); });
+        btn.textContent = s.label;
+      }
+      btn.setAttribute('aria-checked', s.checked ? 'true' : 'false');
+      container.appendChild(btn);
+    });
+    return lastEnd;
+  }
+
+  function chipSpecFromAgg(key, label, mult, checked) {
+    return { key, label, dataset: { mult }, checked: !!checked };
+  }
+  function chipSpecFromItem(key, label, amount, checked) {
+    return { key, label, dataset: { amount }, checked: !!checked };
+  }
+  function itemsChipOffset() {
+    return aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
+  }
+
+  function renderAggChips(aggSet) {
+    const newCurrent = {};
+    const specs = aggSet.map((a, i) => {
       const key = keyFromLabel('agg', a.label, i);
       newCurrent[key] = { label: a.label, mult: a.mult };
-      const { btn, endMs } = makeChip(i, key, a.label, { mult: a.mult });
-      lastEnd = Math.max(lastEnd, endMs);
-      aggChipsEl.appendChild(btn);
+      return chipSpecFromAgg(key, a.label, a.mult, false);
     });
+    const lastEnd = renderChipList(aggChipsEl, specs);
     CURRENT_AGG = newCurrent;
     selectedAggs = [];
     updateAggSummary();
@@ -1186,19 +1239,13 @@
 
   function renderItemChips(itemSet) {
     if (!itemChipsEl) return 0;
-    itemChipsEl.innerHTML = '';
     const newCurrent = {};
-    let lastEnd = 0;
-    // Continue the stagger after the aggravator chips so the whole step-2
-    // panel reads as one continuous hand-written sheet.
-    const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
-    itemSet.forEach((a, i) => {
+    const specs = itemSet.map((a, i) => {
       const key = keyFromLabel('item', a.label, i);
       newCurrent[key] = { label: a.label, amount: a.amount };
-      const { btn, endMs } = makeChip(offset + i, key, a.label, { amount: a.amount });
-      lastEnd = Math.max(lastEnd, endMs);
-      itemChipsEl.appendChild(btn);
+      return chipSpecFromItem(key, a.label, a.amount, false);
     });
+    const lastEnd = renderChipList(itemChipsEl, specs, { baseOffset: itemsChipOffset() });
     CURRENT_ITEM = newCurrent;
     selectedItems = [];
     updateItemSummary();
@@ -1223,6 +1270,7 @@
     try {
       const out = await callSuggestLLM(plaintiff, defendant, grievance);
       stopDraftingIndicator();
+      clearFallbackNotice();
       const aggEnd = renderAggChips(out.aggravators);
       const itemEnd = renderItemChips(out.items);
       lastSuggestHash = h;
@@ -1231,7 +1279,11 @@
     } catch (err) {
       stopDraftingIndicator();
       console.warn('[petty] suggest failed:', err && err.message);
-      setSuggestStatus("couldn’t reach the clerk — using default options");
+      setSuggestStatus('');
+      // A persistent notice above the chip list (rather than the transient
+      // status line) so the user still understands the chips are generic
+      // even after the status line rotates back to "pick any that apply".
+      showFallbackNotice();
       CURRENT_AGG = Object.assign({}, AGG);
       CURRENT_ITEM = Object.assign({}, ITEM);
       const aggEnd = renderDefaultAggChips();
@@ -1240,6 +1292,24 @@
     } finally {
       suggestInflight = false;
     }
+  }
+
+  function showFallbackNotice() {
+    const host = document.getElementById('suggest-status');
+    if (!host) return;
+    let n = document.getElementById('suggest-fallback');
+    if (!n) {
+      n = document.createElement('div');
+      n.id = 'suggest-fallback';
+      n.className = 'suggest-fallback';
+      n.setAttribute('role', 'status');
+      host.parentNode.insertBefore(n, host);
+    }
+    n.textContent = 'clerk unreachable — these are the court’s default options, not tailored to your grievance';
+  }
+  function clearFallbackNotice() {
+    const n = document.getElementById('suggest-fallback');
+    if (n && n.parentNode) n.parentNode.removeChild(n);
   }
 
   function setSuggestStatus(msg) {
@@ -1438,6 +1508,8 @@
     lastSuggestHash = 0;
     setSuggestStatus('');
     stopDraftingIndicator();
+    clearFallbackNotice();
+    clearDeadLinkBanner();
     markOptionsNotReady();
     updateAggSummary();
     updateItemSummary();
@@ -1450,29 +1522,15 @@
   });
 
   function renderDefaultAggChips() {
-    aggChipsEl.innerHTML = '';
-    let lastEnd = 0;
-    Object.keys(AGG).forEach((key, i) => {
-      const a = AGG[key];
-      const { btn, endMs } = makeChip(i, key, a.label, { mult: a.mult });
-      lastEnd = Math.max(lastEnd, endMs);
-      aggChipsEl.appendChild(btn);
-    });
-    return lastEnd;
+    const specs = Object.keys(AGG).map((key) =>
+      chipSpecFromAgg(key, AGG[key].label, AGG[key].mult, false));
+    return renderChipList(aggChipsEl, specs);
   }
 
   function renderDefaultItemChips() {
-    if (!itemChipsEl) return 0;
-    itemChipsEl.innerHTML = '';
-    let lastEnd = 0;
-    const offset = aggChipsEl ? aggChipsEl.querySelectorAll('.chip').length : 0;
-    Object.keys(ITEM).forEach((key, i) => {
-      const a = ITEM[key];
-      const { btn, endMs } = makeChip(offset + i, key, a.label, { amount: a.amount });
-      lastEnd = Math.max(lastEnd, endMs);
-      itemChipsEl.appendChild(btn);
-    });
-    return lastEnd;
+    const specs = Object.keys(ITEM).map((key) =>
+      chipSpecFromItem(key, ITEM[key].label, ITEM[key].amount, false));
+    return renderChipList(itemChipsEl, specs, { baseOffset: itemsChipOffset() });
   }
 
   // ---------- Serve the defendant (collection-letter style share) ----------
@@ -1563,244 +1621,213 @@
     }
     const decoded = decodeFragment(frag);
 
-    if (decoded && decoded.version === 4) {
-      const o = decoded.blob;
-
-      // Reconstruct custom aggravator set
-      if (o.c && typeof o.c === 'object') {
-        CURRENT_AGG = {};
-        Object.keys(o.c).forEach((k) => {
-          const a = o.c[k];
-          CURRENT_AGG[k] = { label: String(a.label || k), mult: Number(a.mult) || 1.2 };
-        });
-      } else {
-        CURRENT_AGG = Object.assign({}, AGG);
-      }
-
-      // Reconstruct custom item set
-      if (o.ci && typeof o.ci === 'object') {
-        CURRENT_ITEM = {};
-        Object.keys(o.ci).forEach((k) => {
-          const a = o.ci[k];
-          CURRENT_ITEM[k] = { label: String(a.label || k), amount: Number(a.amount) || 1.00 };
-        });
-      } else {
-        CURRENT_ITEM = Object.assign({}, ITEM);
-      }
-
-      $('#plaintiff').value = o.p;
-      $('#defendant').value = o.d;
-      $('#grievance').value = o.g;
-
-      renderHydratedAggChips(o.a || []);
-      renderHydratedItemChips(o.i || []);
-
-      selectedAggs = Array.isArray(o.a) ? o.a.slice() : [];
-      selectedItems = Array.isArray(o.i) ? o.i.slice() : [];
-      updateAggSummary();
-      updateItemSummary();
-
-      const ctx = buildContext({
-        plaintiff: o.p, defendant: o.d, grievance: o.g,
-        aggs: selectedAggs, items: selectedItems
-      });
-
-      let payload = readCache(ctx);
-      if (!payload) {
-        startLoading();
-        try {
-          payload = await callLLM(ctx);
-          writeCache(ctx, payload);
-        } catch (err) {
-          payload = fallbackPayload(ctx);
-          writeCache(ctx, payload);
-        }
-        stopLoading();
-      }
-
-      const paidState = {
-        paid: !!o.paid,
-        paidSig: o.ps || '',
-        paidAt: o.pt || ''
-      };
-      renderAndShow(ctx, payload, paidState);
+    const normalized = normalizeDecodedToV4(decoded);
+    if (normalized) {
+      await hydrateAndShow(normalized);
       return;
     }
+    // If a short-URL id was in the URL but we couldn't load it (expired/wrong),
+    // show the intake with a banner so the user understands. Clear the bad
+    // `?c=` param from the location bar so a reload starts fresh.
+    if (shortId && !frag) {
+      showDeadLinkBanner();
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    }
+    show(intake);
+  })();
 
-    if (decoded && decoded.version === 3) {
-      // v3 had micro_damages baked into the cached payload. Treat them as the
-      // sender's chosen itemized line items so receivers see the same doc.
-      const o = decoded.blob;
+  function showDeadLinkBanner() {
+    const intakeEl = document.getElementById('intake');
+    if (!intakeEl) return;
+    if (intakeEl.querySelector('.dead-link-banner')) return;
+    const banner = document.createElement('div');
+    banner.className = 'dead-link-banner';
+    banner.setAttribute('role', 'status');
+    banner.textContent = 'That case link has expired or was mistyped — the clerk has no record of it. File a fresh case below.';
+    intakeEl.insertBefore(banner, intakeEl.firstChild);
+  }
+  function clearDeadLinkBanner() {
+    const intakeEl = document.getElementById('intake');
+    const b = intakeEl && intakeEl.querySelector('.dead-link-banner');
+    if (b && b.parentNode) b.parentNode.removeChild(b);
+  }
 
-      if (o.c && typeof o.c === 'object') {
-        CURRENT_AGG = {};
-        Object.keys(o.c).forEach((k) => {
-          const a = o.c[k];
-          CURRENT_AGG[k] = { label: String(a.label || k), mult: Number(a.mult) || 1.2 };
-        });
-      } else {
-        CURRENT_AGG = Object.assign({}, AGG);
-      }
-      CURRENT_ITEM = Object.assign({}, ITEM);
+  // ---------- Hydration: one shared path for all fragment versions ----------
+  //
+  // Any decoded fragment is first normalized into a v4-shaped blob, then fed
+  // through the same hydrate routine. Earlier versions carried their judgment
+  // payload inline (v1/v2) or embedded `micro_damages` in the cached payload
+  // (v3); we surface those quirks as small flags on the normalized record,
+  // and the hydrator handles them in a single place instead of three parallel
+  // if-blocks.
 
-      $('#plaintiff').value = o.p;
-      $('#defendant').value = o.d;
-      $('#grievance').value = o.g;
-      renderHydratedAggChips(o.a || []);
+  function normalizeDecodedToV4(decoded) {
+    if (!decoded) return null;
+    const o = decoded.blob;
 
-      selectedAggs = Array.isArray(o.a) ? o.a.slice() : [];
-      updateAggSummary();
-
-      const ctx = buildContext({
-        plaintiff: o.p, defendant: o.d, grievance: o.g,
-        aggs: selectedAggs, items: []
-      });
-
-      // Pull cached v3 payload if present — it has micro_damages.
-      let cached = null;
-      try {
-        const raw = localStorage.getItem('psc:' + inputHash(ctx));
-        if (raw) cached = JSON.parse(raw);
-      } catch (e) { cached = null; }
-
-      let payload;
-      if (cached) {
-        payload = Object.assign({}, cached);
-      } else {
-        startLoading();
-        try { payload = await callLLM(ctx); }
-        catch (err) { payload = fallbackPayload(ctx); }
-        stopLoading();
-      }
-
-      // Absorb any old micro_damages from the cache as itemized line-items so
-      // the receiver still sees a populated judgment.
-      if (Array.isArray(cached && cached.micro_damages) && cached.micro_damages.length) {
-        const tmp = {};
-        const keys = [];
-        cached.micro_damages.slice(0, 3).forEach((m, i) => {
-          const k = keyFromLabel('item', m.label || ('item' + i), i);
-          tmp[k] = { label: String(m.label || 'petty matter'), amount: Math.max(0, Number(m.amount) || 0) };
-          keys.push(k);
-        });
-        CURRENT_ITEM = tmp;
-        selectedItems = keys;
-        ctx.items = keys.slice();
-        updateItemSummary();
-      }
-
-      delete payload.micro_damages;
-      writeCache(ctx, payload);
-
-      const paidState = {
-        paid: !!o.paid,
-        paidSig: o.ps || '',
-        paidAt: o.pt || ''
-      };
-      renderAndShow(ctx, payload, paidState);
-      return;
+    if (decoded.version === 4) {
+      return { blob: o, inlinePayload: null, absorbMicroDamages: 'none' };
     }
 
-    // Legacy v1/v2: pre-existing behavior.
-    if (decoded && (decoded.version === 1 || decoded.version === 2)) {
-      const o = decoded.blob;
-      $('#plaintiff').value = o.p;
-      $('#defendant').value = o.d;
-      $('#grievance').value = o.g;
+    if (decoded.version === 3) {
+      return {
+        blob: {
+          v: 4, p: o.p, d: o.d, g: o.g,
+          a: Array.isArray(o.a) ? o.a.slice() : [],
+          i: [],
+          c: o.c || null,
+          ci: null,
+          paid: o.paid, ps: o.ps, pt: o.pt
+        },
+        inlinePayload: null,
+        absorbMicroDamages: 'from-cache'
+      };
+    }
 
+    if (decoded.version === 1 || decoded.version === 2) {
       const def = (o.v === 2 && o.ag) ? o.ag : (AGG[o.a] || { label: o.a, mult: 1.2 });
+      const custom = {};
+      custom[o.a] = { label: def.label, mult: def.mult };
+      return {
+        blob: {
+          v: 4, p: o.p, d: o.d, g: o.g,
+          a: [o.a],
+          i: [],
+          c: custom,
+          ci: null,
+          paid: o.paid, ps: o.ps, pt: o.pt
+        },
+        inlinePayload: o.ai || null,
+        absorbMicroDamages: Array.isArray(o.ai && o.ai.micro_damages) ? 'from-inline' : 'none'
+      };
+    }
+
+    return null;
+  }
+
+  function absorbLegacyItems(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const tmp = {};
+    const keys = [];
+    list.slice(0, 3).forEach((m, i) => {
+      const k = keyFromLabel('item', m.label || ('item' + i), i);
+      tmp[k] = { label: String(m.label || 'petty matter'), amount: Math.max(0, Number(m.amount) || 0) };
+      keys.push(k);
+    });
+    return { tmp, keys };
+  }
+
+  async function hydrateAndShow(norm) {
+    const o = norm.blob;
+
+    // 1. Reconstruct chip dictionaries from the blob's custom sets, falling
+    //    back to the built-in defaults when the blob didn't carry customs.
+    if (o.c && typeof o.c === 'object') {
       CURRENT_AGG = {};
-      CURRENT_AGG[o.a] = { label: def.label, mult: def.mult };
-      CURRENT_ITEM = Object.assign({}, ITEM);
-
-      aggChipsEl.innerHTML = '';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      btn.setAttribute('aria-checked', 'true');
-      btn.dataset.key = o.a;
-      btn.dataset.mult = String(def.mult);
-      btn.textContent = def.label; // multiplier hidden — revealed only in judgment
-      aggChipsEl.appendChild(btn);
-      selectedAggs = [o.a];
-      updateAggSummary();
-
-      const ctx = buildContext({
-        plaintiff: o.p, defendant: o.d, grievance: o.g,
-        aggs: [o.a], items: []
+      Object.keys(o.c).forEach((k) => {
+        const a = o.c[k];
+        CURRENT_AGG[k] = { label: String(a.label || k), mult: Number(a.mult) || 1.2 };
       });
+    } else {
+      CURRENT_AGG = Object.assign({}, AGG);
+    }
+    if (o.ci && typeof o.ci === 'object') {
+      CURRENT_ITEM = {};
+      Object.keys(o.ci).forEach((k) => {
+        const a = o.ci[k];
+        CURRENT_ITEM[k] = { label: String(a.label || k), amount: Number(a.amount) || 1.00 };
+      });
+    } else {
+      CURRENT_ITEM = Object.assign({}, ITEM);
+    }
 
-      const ai = o.ai || {};
-      // Absorb legacy inline micro_damages as itemized line items.
-      if (Array.isArray(ai.micro_damages) && ai.micro_damages.length) {
-        const tmp = {};
-        const keys = [];
-        ai.micro_damages.slice(0, 3).forEach((m, i) => {
-          const k = keyFromLabel('item', m.label || ('item' + i), i);
-          tmp[k] = { label: String(m.label || 'petty matter'), amount: Math.max(0, Number(m.amount) || 0) };
-          keys.push(k);
-        });
-        CURRENT_ITEM = tmp;
-        selectedItems = keys;
-        ctx.items = keys.slice();
-        updateItemSummary();
-      }
+    // 2. Form fields + selections + initial chip render.
+    $('#plaintiff').value = o.p;
+    $('#defendant').value = o.d;
+    $('#grievance').value = o.g;
+    selectedAggs = Array.isArray(o.a) ? o.a.slice() : [];
+    selectedItems = Array.isArray(o.i) ? o.i.slice() : [];
+    renderHydratedAggChips(selectedAggs);
+    updateAggSummary();
 
-      const payload = {
+    let ctx = buildContext({
+      plaintiff: o.p, defendant: o.d, grievance: o.g,
+      aggs: selectedAggs, items: selectedItems
+    });
+
+    // 3. Payload resolution. v1/v2 carries an inline payload; v3/v4 go through
+    //    cache → LLM → deterministic fallback. We also collect any legacy
+    //    micro_damages here; they'll be migrated into items below.
+    let payload = null;
+    let legacyMicroDamages = null;
+
+    if (norm.inlinePayload) {
+      const ai = norm.inlinePayload;
+      if (norm.absorbMicroDamages === 'from-inline') legacyMicroDamages = ai.micro_damages;
+      payload = {
         case_number: ai.case_number || caseNumberFromHash(inputHash(ctx)),
         county: ai.county || pickCounty(inputHash(ctx)),
         findings: Array.isArray(ai.findings) ? ai.findings.slice(0, 3) : fallbackPayload(ctx).findings,
         verdict_archetype: ai.verdict_archetype || VERDICTS[inputHash(ctx) % VERDICTS.length],
         base_damages: fallbackBaseDamages(o.g)
       };
-      writeCache(ctx, payload);
-
-      const paidState = {
-        paid: !!o.paid,
-        paidSig: o.ps || '',
-        paidAt: o.pt || ''
-      };
-      renderAndShow(ctx, payload, paidState);
-      return;
+    } else if (norm.absorbMicroDamages === 'from-cache') {
+      // v3: read cache manually so we don't lose micro_damages (readCache
+      // strips them). inputHash ignores items, so migration below doesn't
+      // change the cache key.
+      let cached = null;
+      try {
+        const raw = localStorage.getItem('psc:' + inputHash(ctx));
+        if (raw) cached = JSON.parse(raw);
+      } catch (e) {}
+      if (cached) {
+        payload = Object.assign({}, cached);
+        if (Array.isArray(cached.micro_damages)) legacyMicroDamages = cached.micro_damages;
+      }
+    } else {
+      payload = readCache(ctx);
     }
 
-    show(intake);
-  })();
+    if (!payload) {
+      startLoading();
+      try { payload = await callLLM(ctx); }
+      catch (err) { payload = fallbackPayload(ctx); }
+      stopLoading();
+    }
+
+    // 4. Legacy micro_damages → items migration.
+    const absorbed = absorbLegacyItems(legacyMicroDamages);
+    if (absorbed) {
+      CURRENT_ITEM = absorbed.tmp;
+      selectedItems = absorbed.keys;
+      ctx = buildContext({
+        plaintiff: o.p, defendant: o.d, grievance: o.g,
+        aggs: selectedAggs, items: selectedItems
+      });
+    }
+
+    renderHydratedItemChips(selectedItems);
+    updateItemSummary();
+
+    if (payload && payload.micro_damages) delete payload.micro_damages;
+    if (payload) writeCache(ctx, payload);
+
+    const paidState = { paid: !!o.paid, paidSig: o.ps || '', paidAt: o.pt || '' };
+    renderAndShow(ctx, payload, paidState);
+  }
 
   function renderHydratedAggChips(selectedKeys) {
-    aggChipsEl.innerHTML = '';
-    Object.keys(CURRENT_AGG).forEach((key) => {
-      const a = CURRENT_AGG[key];
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      const isChecked = Array.isArray(selectedKeys) && selectedKeys.indexOf(key) >= 0;
-      btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
-      btn.dataset.key = key;
-      btn.dataset.mult = String(a.mult);
-      btn.textContent = a.label; // multiplier hidden — revealed only in judgment
-      aggChipsEl.appendChild(btn);
-    });
+    const checked = new Set(Array.isArray(selectedKeys) ? selectedKeys : []);
+    const specs = Object.keys(CURRENT_AGG).map((key) =>
+      chipSpecFromAgg(key, CURRENT_AGG[key].label, CURRENT_AGG[key].mult, checked.has(key)));
+    renderChipList(aggChipsEl, specs, { animate: false });
   }
 
   function renderHydratedItemChips(selectedKeys) {
-    if (!itemChipsEl) return;
-    itemChipsEl.innerHTML = '';
-    Object.keys(CURRENT_ITEM).forEach((key) => {
-      const a = CURRENT_ITEM[key];
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip';
-      btn.setAttribute('role', 'checkbox');
-      const isChecked = Array.isArray(selectedKeys) && selectedKeys.indexOf(key) >= 0;
-      btn.setAttribute('aria-checked', isChecked ? 'true' : 'false');
-      btn.dataset.key = key;
-      btn.dataset.amount = String(a.amount);
-      btn.textContent = a.label; // amount hidden — revealed only in judgment
-      itemChipsEl.appendChild(btn);
-    });
+    const checked = new Set(Array.isArray(selectedKeys) ? selectedKeys : []);
+    const specs = Object.keys(CURRENT_ITEM).map((key) =>
+      chipSpecFromItem(key, CURRENT_ITEM[key].label, CURRENT_ITEM[key].amount, checked.has(key)));
+    renderChipList(itemChipsEl, specs, { animate: false });
   }
 
 })();

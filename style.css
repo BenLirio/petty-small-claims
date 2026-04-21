@@ -520,6 +520,34 @@ textarea::placeholder {
   flex-wrap: wrap;
 }
 
+/* Small role label prepended to the judgment doc on load so a recipient
+   knows they're looking at a case served to them (vs. one they filed
+   themselves). Subtle by design — a carbon-copy stamp, not a heading. */
+.role-tag {
+  font-family: 'Special Elite', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 2px 0 10px;
+  border-bottom: 1px dashed var(--ink-faint);
+  margin: 0 0 14px;
+}
+
+/* Dead-link banner shown when a shared `?c=<id>` URL couldn't be resolved
+   (expired TTL, mistyped id, or case-store unreachable). */
+.dead-link-banner {
+  font-family: 'Special Elite', monospace;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  color: var(--stamp-red);
+  background: rgba(177, 39, 27, 0.08);
+  border: 1.5px dashed var(--stamp-red);
+  padding: 10px 14px;
+  margin: 0 0 18px;
+}
+
 .case-stamp {
   font-family: 'IBM Plex Mono', monospace;
   font-weight: 700;
@@ -793,6 +821,21 @@ textarea::placeholder {
   color: var(--ink-faint);
   text-transform: none;
   margin-left: 4px;
+}
+
+/* Persistent notice shown when the clerk was unreachable and step-2 fell
+   back to generic defaults — replaces the transient status text, which
+   rotates back to "pick any that apply" and wipes the failure signal. */
+.suggest-fallback {
+  font-family: 'Special Elite', monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--stamp-red);
+  background: rgba(177, 39, 27, 0.06);
+  border-left: 2px solid var(--stamp-red);
+  padding: 6px 10px;
+  margin: 8px 0 2px;
+  line-height: 1.35;
 }
 
 .suggest-status {
