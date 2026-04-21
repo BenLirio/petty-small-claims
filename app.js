@@ -1065,12 +1065,20 @@
     } else if (isSender && readPaidLocally(ctx)) {
       renderPaidStamp(readPaidLocally(ctx));
     }
-    // Only the plaintiff (the filer) gets the SERVE THE DEFENDANT / "file
-    // another case" controls. Recipients land here via a shared link and
-    // should only see the judgment + TENDER PAYMENT flow below — showing
-    // them the serve button would suggest they're supposed to re-share the
-    // link (to themselves, effectively) and drowns out the real next step.
+    // Share / reset row visibility:
+    //   - Recipients never see it — it's the plaintiff's collection toolbar.
+    //   - Senders always see the row (so they can still "file another case"),
+    //     but the SERVE THE DEFENDANT button + its preamble hide once the
+    //     claim is paid. There's nothing left to serve, and leaving the
+    //     button up while a big PAID stamp sits above it reads as contradictory.
+    const effectivelyPaid = sigValid || (isSender && !!readPaidLocally(ctx));
     if (shareSection) shareSection.style.display = isSender ? '' : 'none';
+    const serveBtn = document.getElementById('serve-btn');
+    const preamble = shareSection ? shareSection.querySelector('.share-preamble') : null;
+    const serveVisible = isSender && !effectivelyPaid;
+    if (serveBtn) serveBtn.style.display = serveVisible ? '' : 'none';
+    if (preamble) preamble.style.display = serveVisible ? '' : 'none';
+
     renderPaidActions(ctx, payload, state);
     show(judgment);
   }
