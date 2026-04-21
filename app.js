@@ -880,7 +880,7 @@
     if (isSender) {
       const note = document.createElement('div');
       note.className = 'paid-note';
-      note.innerHTML = 'Tap <strong>SERVE THE DEFENDANT</strong> above and send the notice to the person who owes you. When they mark it paid, they\'ll hand you back a short receipt URL — opening that URL once stamps <strong>PAID</strong> on your case permanently on this device.';
+      note.innerHTML = 'Tap <strong>SERVE THE DEFENDANT</strong> above and send the notice to the person who owes you. When they tender payment, the court record updates — reopen this link anytime and you\'ll see the <strong>PAID</strong> stamp.';
       paidSection.appendChild(note);
       return;
     }
