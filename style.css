@@ -657,10 +657,15 @@ textarea::placeholder {
 }
 
 @keyframes total-thump {
+  /* Opacity is explicit at every keyframe because the sibling line-item
+     rule declares opacity:0 on .reveal-amt as its pre-animation state; if
+     this keyframe omitted opacity at the tail, the browser would synthesize
+     an implicit 100% keyframe at opacity:0 and the total would fade back
+     out right after landing. */
   0%   { transform: scale(0.4); opacity: 0; filter: blur(4px); }
   55%  { transform: scale(1.18); opacity: 1; filter: blur(0); }
-  80%  { transform: scale(0.96); }
-  100% { transform: scale(1); }
+  80%  { transform: scale(0.96); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* Line-item amounts fade in one after the other so the column "fills in"

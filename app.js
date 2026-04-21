@@ -21,6 +21,40 @@
   'use strict';
 
   const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
+  // Short-URL store for shareable cases. The app POSTs the encoded case
+  // blob (same base64url we used to stuff in a #fragment) and gets back a
+  // short id, then rewrites the URL to /?c=<id>. Reason: iOS Messages
+  // can't reliably auto-linkify a URL with a 1500+ char hash fragment, so
+  // shared links used to lose their state. A short URL linkifies cleanly
+  // and iMessage can pull OG tags for a rich preview card.
+  const CASE_STORE = 'https://rrun6q1lfk.execute-api.us-east-1.amazonaws.com';
+  const CASE_SLUG = 'petty-small-claims';
+
+  async function saveCaseToStore(fragString) {
+    try {
+      const res = await fetch(CASE_STORE + '/case', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: CASE_SLUG, data: fragString })
+      });
+      if (!res.ok) return null;
+      const j = await res.json();
+      return j && typeof j.id === 'string' ? j.id : null;
+    } catch (_) { return null; }
+  }
+
+  async function loadCaseFromStore(id) {
+    try {
+      const res = await fetch(CASE_STORE + '/case/' + encodeURIComponent(id));
+      if (!res.ok) return null;
+      const j = await res.json();
+      return j && typeof j.data === 'string' ? j.data : null;
+    } catch (_) { return null; }
+  }
+
+  function shortUrlFor(id) {
+    return location.origin + location.pathname + '?c=' + id;
+  }
   const SLUG = 'petty-small-claims';
 
   // Hard ceiling — final awarded total is always STRICTLY LESS THAN this.
@@ -826,12 +860,18 @@
     receiptBox.className = 'receipt-box hidden';
     wrap.appendChild(receiptBox);
 
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const sig = paidSignature(ctx);
       const nowStamp = todayStamp();
       const frag = encodeCaseToFragment(ctx, { paid: 1, paidSig: sig, paidAt: nowStamp });
-      const receiptUrl = location.origin + location.pathname + '#' + frag;
-      history.replaceState(null, '', '#' + frag);
+      // Try the short-URL store so the receipt link is a clean, share-friendly
+      // URL. On failure we fall back to the hash fragment — the receipt still
+      // works, just with the iOS auto-linkify limitation.
+      const shortId = await saveCaseToStore(frag);
+      const receiptUrl = shortId
+        ? shortUrlFor(shortId)
+        : (location.origin + location.pathname + '#' + frag);
+      history.replaceState(null, '', shortId ? ('?c=' + shortId) : ('#' + frag));
       renderPaidStamp(nowStamp);
 
       receiptBox.classList.remove('hidden');
@@ -1366,7 +1406,14 @@
     stopLoading();
 
     const frag = encodeCaseToFragment(ctx);
-    history.replaceState(null, '', '#' + frag);
+    const shortId = await saveCaseToStore(frag);
+    if (shortId) {
+      history.replaceState(null, '', location.pathname + '?c=' + shortId);
+    } else {
+      // Fallback: if the store is unreachable, keep the old hash-fragment
+      // behavior so at least the link still hydrates (just poorly on iOS).
+      history.replaceState(null, '', '#' + frag);
+    }
 
     markSenderOwned(ctx);
 
@@ -1450,40 +1497,22 @@
     return { plaintiffName, defendantName, grievanceText, total, docket };
   }
 
-  function buildDemandLetter() {
-    const c = currentCaseText();
-    const url = location.href;
-    const lines = [
-      c.defendantName + ',',
-      '',
-      'You have been served.',
-      '',
-      'In the matter of "' + c.grievanceText + '", the Circuit Court of Honest Grievances has ruled in favor of ' + c.plaintiffName + '.',
-      'Awarded total: ' + c.total + (c.docket ? ' (docket ' + c.docket + ')' : '') + '.',
-      '',
-      'Remit payment at your earliest convenience. Mark the claim paid at the link below and return the receipt URL to ' + c.plaintiffName + ' as proof.',
-      '',
-      url
-    ];
-    return lines.join('\n');
-  }
-
-  function buildDemandTitle() {
-    const c = currentCaseText();
-    return 'You have been served — ' + c.plaintiffName + ' v. ' + c.defendantName;
-  }
-
+  // Share payload intentionally minimal: one sentence + the short URL in the
+  // `url` field. When Messages/iMessage receives this, it linkifies the URL
+  // cleanly and pulls the page's OG tags for a rich preview card, which
+  // doesn't work when the body is a long pasted demand letter with a 1500+
+  // char hash fragment buried inside it.
   window.serveDefendant = function () {
-    const title = buildDemandTitle();
-    const text = buildDemandLetter();
+    const c = currentCaseText();
     const url = location.href;
+    const oneLiner = c.defendantName + ', you have been served.';
 
     if (navigator.share) {
-      navigator.share({ title: title, text: text, url: url }).catch(() => {});
+      navigator.share({ title: 'You have been served', text: oneLiner, url: url }).catch(() => {});
       return;
     }
 
-    const toCopy = text; // text already contains the URL
+    const toCopy = oneLiner + ' ' + url;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(toCopy)
         .then(() => {
@@ -1496,9 +1525,9 @@
             alert('Demand copied — paste it to the defendant.');
           }
         })
-        .catch(() => { window.prompt('Copy this demand and send it to the defendant:', toCopy); });
+        .catch(() => { window.prompt('Copy this and send it to the defendant:', toCopy); });
     } else {
-      window.prompt('Copy this demand and send it to the defendant:', toCopy);
+      window.prompt('Copy this and send it to the defendant:', toCopy);
     }
   };
 
@@ -1519,7 +1548,19 @@
     if (shareSection) shareSection.style.display = 'none';
     if (paidSection) paidSection.style.display = 'none';
 
-    const frag = (location.hash || '').replace(/^#/, '');
+    // Hydration priority: new short-URL `?c=<id>` first; fall through to
+    // legacy `#<frag>` so any already-shared links keep working.
+    const params = new URLSearchParams(location.search);
+    const shortId = params.get('c');
+    let frag = '';
+    if (shortId) {
+      // Keep the intake UI hidden briefly while we fetch; on failure we fall
+      // back to the intake form like any other fresh-load.
+      frag = (await loadCaseFromStore(shortId)) || '';
+    }
+    if (!frag) {
+      frag = (location.hash || '').replace(/^#/, '');
+    }
     const decoded = decodeFragment(frag);
 
     if (decoded && decoded.version === 4) {
